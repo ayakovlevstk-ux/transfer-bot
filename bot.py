@@ -23,13 +23,12 @@ from telegram.ext import (
 # =========================
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# ВСТАВЬ СВОЙ TELEGRAM ID
+ADMIN_ID = 8308540295
 
 if not TOKEN:
     raise ValueError("TOKEN не найден")
-
-if not ADMIN_ID:
-    raise ValueError("ADMIN_ID не найден")
 
 # =========================
 # STATES
@@ -69,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # =========================
-# ORDER FLOW
+# ORDER START
 # =========================
 
 async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,6 +79,8 @@ async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return FROM
 
+# =========================
+# FROM
 # =========================
 
 async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,6 +94,8 @@ async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TO
 
 # =========================
+# TO
+# =========================
 
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -104,6 +107,8 @@ async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return DATE
 
+# =========================
+# DATE
 # =========================
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,8 +149,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user = update.effective_user
 
-    # ================= CANCEL =================
-
+    # CANCEL
     if text == "❌ Отмена":
 
         await update.message.reply_text(
@@ -155,8 +159,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return ConversationHandler.END
 
-    # ================= CONFIRM =================
-
+    # CONFIRM
     if text == "✅ Подтвердить":
 
         order_id = str(int(time.time()))
@@ -208,9 +211,14 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
 
-        # ================= SEND TO ADMIN =================
+        # =========================
+        # SEND TO ADMIN
+        # =========================
 
         try:
+
+            print("ADMIN_ID =", ADMIN_ID)
+            print("TRY SEND ORDER")
 
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
@@ -218,13 +226,11 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
-            print("ORDER SENT TO ADMIN")
+            print("ORDER SENT SUCCESS")
 
         except Exception as e:
 
-            print("ADMIN ERROR:", e)
-
-        # ================= CLIENT MESSAGE =================
+            print("ADMIN SEND ERROR:", e)
 
         await update.message.reply_text(
             "✅ Заказ отправлен диспетчеру!",
@@ -255,7 +261,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # ================= SUPPORT =================
+    # SUPPORT
 
     if user_id in support_users:
 
@@ -284,7 +290,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # ================= BUTTONS =================
+    # BUTTONS
 
     if text == "💰 Цены":
 
@@ -312,7 +318,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # =========================
-# STATUS BUTTONS
+# STATUS HANDLER
 # =========================
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -355,11 +361,9 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 Статус: {o['status']}
 """
 
-    await query.message.edit_text(
-        new_text
-    )
+    await query.message.edit_text(new_text)
 
-    # ================= CLIENT STATUS =================
+    # CLIENT STATUS MESSAGE
 
     try:
 
@@ -380,7 +384,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("CLIENT STATUS ERROR:", e)
 
 # =========================
-# ADMIN REPLY
+# REPLY TO CLIENT
 # =========================
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
