@@ -163,7 +163,7 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
 
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
+            chat_id=8308540295,
             text=order_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -210,7 +210,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in support_users:
 
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
+            chat_id=8308540295,
             text=f"""
 ❓ ВОПРОС ОТ КЛИЕНТА
 
