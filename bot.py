@@ -541,19 +541,6 @@ def main():
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # =========================
-    # LANGUAGE HANDLER (НОВОЕ)
-    # =========================
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & (
-                filters.Regex("Русский") |
-                filters.Regex("English")
-            ),
-            set_language
-        )
-    )
-
     conv_handler = ConversationHandler(
 
         entry_points=[
