@@ -11,6 +11,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ConversationHandler,
     ContextTypes,
     filters
 )
@@ -25,6 +26,9 @@ if not TOKEN:
 # ================= STORAGE =================
 orders = {}
 support_users = {}
+
+# ================= STATES =================
+FROM, TO, DATE = range(3)
 
 # ================= MENU =================
 menu_keyboard = ReplyKeyboardMarkup(
@@ -44,93 +48,94 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=menu_keyboard
     )
 
-# ================= MAIN HANDLER =================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= ORDER FLOW =================
+async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Откуда?")
+    return FROM
+
+async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["from"] = update.message.text
+    await update.message.reply_text("Куда?")
+    return TO
+
+async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["to"] = update.message.text
+    await update.message.reply_text("Когда?")
+    return DATE
+
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    context.user_data["date"] = update.message.text
+
+    order_id = str(user_id) + str(int(time.time()))
+
+    orders[order_id] = {
+        "from": context.user_data["from"],
+        "to": context.user_data["to"],
+        "date": context.user_data["date"],
+        "user_id": user_id,
+        "status": "NEW"
+    }
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Принять", callback_data=f"accept_{order_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{order_id}")
+        ],
+        [
+            InlineKeyboardButton("🚗 В пути", callback_data=f"progress_{order_id}"),
+            InlineKeyboardButton("🏁 Завершить", callback_data=f"done_{order_id}")
+        ]
+    ]
+
+    text = f"""
+🚕 НОВЫЙ ЗАКАЗ #{order_id}
+
+📍 Откуда: {orders[order_id]['from']}
+📍 Куда: {orders[order_id]['to']}
+📅 Когда: {orders[order_id]['date']}
+
+📊 Статус: NEW
+"""
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    await update.message.reply_text("✅ Заказ отправлен!")
+
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Отменено")
+    return ConversationHandler.END
+
+# ================= MENU HANDLER =================
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # ========== SUPPORT MODE ==========
+    # SUPPORT MODE
     if user_id in support_users:
-        question = text
-
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"❓ ПОДДЕРЖКА\n\n👤 User: {user_id}\n\n💬 {question}"
+            text=f"❓ ВОПРОС\nUser: {user_id}\n\n{text}"
         )
-
-        await update.message.reply_text("✅ Вопрос отправлен в поддержку")
+        await update.message.reply_text("✅ Отправлено в поддержку")
         del support_users[user_id]
         return
 
-    # ========== MENU ==========
-    if text == "🚕 Заказать трансфер":
-        await update.message.reply_text("Откуда → Куда → Дата")
-
-    elif text == "💰 Цены":
+    if text == "💰 Цены":
         await update.message.reply_text("Керкраде → Амстердам = 120€")
 
     elif text == "📍 Маршруты":
         await update.message.reply_text("Керкраде → Амстердам\nКеркраде → Брюссель")
 
     elif text == "❓ Помощь":
-        await update.message.reply_text("Напиши свой вопрос ✍️")
         support_users[user_id] = True
-        return
-
-    # ========== CREATE ORDER ==========
-    else:
-        try:
-            parts = text.split("→")
-
-            if len(parts) < 2:
-                return await update.message.reply_text("Формат: Откуда → Куда → Дата")
-
-            from_city = parts[0].strip()
-            to_city = parts[1].strip()
-            date = parts[2].strip() if len(parts) > 2 else "не указана"
-
-            order_id = str(user_id) + str(int(time.time()))
-
-            orders[order_id] = {
-                "from": from_city,
-                "to": to_city,
-                "date": date,
-                "user_id": user_id,
-                "status": "NEW"
-            }
-
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Принять", callback_data=f"accept_{order_id}"),
-                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{order_id}")
-                ],
-                [
-                    InlineKeyboardButton("🚗 В пути", callback_data=f"progress_{order_id}"),
-                    InlineKeyboardButton("🏁 Завершить", callback_data=f"done_{order_id}")
-                ]
-            ]
-
-            text_order = f"""
-🚕 НОВЫЙ ЗАКАЗ #{order_id}
-
-📍 Откуда: {from_city}
-📍 Куда: {to_city}
-📅 Дата: {date}
-
-📊 Статус: NEW
-"""
-
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=text_order,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-
-            await update.message.reply_text("✅ Заказ отправлен диспетчеру!")
-
-        except Exception as e:
-            print("ORDER ERROR:", e)
-            await update.message.reply_text("Ошибка заказа")
+        await update.message.reply_text("Напиши свой вопрос ✍️")
 
 # ================= STATUS BUTTONS =================
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,7 +165,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📍 Откуда: {o['from']}
 📍 Куда: {o['to']}
-📅 Дата: {o['date']}
+📅 Когда: {o['date']}
 
 📊 Статус: {o['status']}
 """
@@ -182,16 +187,28 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("✅ Отправлено")
 
-    except Exception as e:
-        print(e)
+    except:
         await update.message.reply_text("Ошибка /reply")
 
 # ================= MAIN =================
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("🚕 Заказать трансфер"), start_order)
+        ],
+        states={
+            FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
+            TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_to)],
+            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(conv)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
     app.add_handler(CallbackQueryHandler(status_handler))
     app.add_handler(CommandHandler("reply", reply))
 
