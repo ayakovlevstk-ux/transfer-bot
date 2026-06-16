@@ -1,10 +1,11 @@
 import os
 import time
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
 )
 
 from telegram.ext import (
@@ -17,7 +18,9 @@ from telegram.ext import (
     filters
 )
 
-# ================= CONFIG =================
+# =========================
+# CONFIG
+# =========================
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -25,16 +28,22 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
-# ================= STATES =================
+# =========================
+# STATES
+# =========================
 
 FROM, TO, DATE = range(3)
 
-# ================= STORAGE =================
+# =========================
+# STORAGE
+# =========================
 
 orders = {}
 support_users = {}
 
-# ================= MENU =================
+# =========================
+# MENU
+# =========================
 
 menu_keyboard = ReplyKeyboardMarkup(
     [
@@ -45,36 +54,61 @@ menu_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ================= START =================
+# =========================
+# START
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "🚕 Добро пожаловать в Transfer Bot",
         reply_markup=menu_keyboard
     )
 
-# ================= ORDER FLOW =================
+# =========================
+# ORDER FLOW
+# =========================
 
 async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📍 Откуда вас забрать?")
+
+    await update.message.reply_text(
+        "📍 Откуда вас забрать?"
+    )
+
     return FROM
 
+# =========================
+
 async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     context.user_data["from"] = update.message.text
 
-    await update.message.reply_text("📍 Куда едем?")
+    await update.message.reply_text(
+        "📍 Куда едем?"
+    )
+
     return TO
 
+# =========================
+
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     context.user_data["to"] = update.message.text
 
-    await update.message.reply_text("📅 Когда нужен трансфер?")
+    await update.message.reply_text(
+        "📅 Когда нужен трансфер?"
+    )
+
     return DATE
 
+# =========================
+
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["date"] = update.message.text
 
     user = update.effective_user
+
+    context.user_data["date"] = update.message.text
+
     order_id = str(int(time.time()))
 
     orders[order_id] = {
@@ -104,16 +138,19 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ Принять",
                 callback_data=f"accept_{order_id}"
             ),
+
             InlineKeyboardButton(
                 "❌ Отказать",
                 callback_data=f"reject_{order_id}"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "🚗 В пути",
                 callback_data=f"progress_{order_id}"
             ),
+
             InlineKeyboardButton(
                 "🏁 Завершён",
                 callback_data=f"done_{order_id}"
@@ -121,16 +158,23 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
 
-    # отправка админу
+    # ===== SEND TO ADMIN =====
+
     try:
+
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=order_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+        print("ORDER SENT TO ADMIN")
+
     except Exception as e:
+
         print("ADMIN ERROR:", e)
+
+    # ===== CLIENT CONFIRM =====
 
     await update.message.reply_text(
         "✅ Заказ отправлен диспетчеру!",
@@ -139,9 +183,12 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ================= CANCEL =================
+# =========================
+# CANCEL
+# =========================
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "❌ Заказ отменён",
         reply_markup=menu_keyboard
@@ -149,13 +196,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ================= MENU =================
+# =========================
+# MENU
+# =========================
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     text = update.message.text
     user_id = update.effective_user.id
 
-    # ===== SUPPORT MESSAGE =====
+    # ================= SUPPORT =================
+
     if user_id in support_users:
 
         await context.bot.send_message(
@@ -163,7 +214,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=f"""
 ❓ ВОПРОС ОТ КЛИЕНТА
 
-👤 ID: {user_id}
+👤 USER ID: {user_id}
 
 💬 {text}
 """
@@ -174,9 +225,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         del support_users[user_id]
+
         return
 
-    # ===== MENU =====
+    # ================= MENU BUTTONS =================
 
     if text == "💰 Цены":
 
@@ -203,9 +255,12 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✍️ Напишите ваш вопрос"
         )
 
-# ================= STATUS HANDLER =================
+# =========================
+# STATUS BUTTONS
+# =========================
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
 
     await query.answer()
@@ -213,24 +268,32 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action, order_id = query.data.split("_", 1)
 
     if order_id not in orders:
-        await query.message.edit_text("❌ Заказ не найден")
+
+        await query.message.edit_text(
+            "❌ Заказ не найден"
+        )
+
         return
 
     if action == "accept":
+
         orders[order_id]["status"] = "ACCEPTED"
 
     elif action == "reject":
+
         orders[order_id]["status"] = "REJECTED"
 
     elif action == "progress":
+
         orders[order_id]["status"] = "IN PROGRESS"
 
     elif action == "done":
+
         orders[order_id]["status"] = "DONE"
 
     o = orders[order_id]
 
-    text = f"""
+    new_text = f"""
 🚕 ЗАКАЗ #{order_id}
 
 📍 Откуда: {o['from']}
@@ -240,9 +303,13 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 Статус: {o['status']}
 """
 
-    await query.message.edit_text(text)
+    await query.message.edit_text(
+        new_text
+    )
 
-# ================= REPLY =================
+# =========================
+# ADMIN REPLY
+# =========================
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -250,6 +317,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+
         user_id = int(context.args[0])
 
         text = " ".join(context.args[1:])
@@ -259,14 +327,19 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=f"📩 Ответ поддержки:\n\n{text}"
         )
 
-        await update.message.reply_text("✅ Ответ отправлен")
+        await update.message.reply_text(
+            "✅ Ответ отправлен"
+        )
 
     except:
+
         await update.message.reply_text(
             "Использование:\n/reply USER_ID текст"
         )
 
-# ================= MAIN =================
+# =========================
+# MAIN
+# =========================
 
 def main():
 
@@ -274,7 +347,8 @@ def main():
 
     # ===== ORDER CONVERSATION =====
 
-    conv = ConversationHandler(
+    conv_handler = ConversationHandler(
+
         entry_points=[
             MessageHandler(
                 filters.TEXT & filters.Regex("^🚕 Заказать трансфер$"),
@@ -303,7 +377,7 @@ def main():
                     filters.TEXT & ~filters.COMMAND,
                     get_date
                 )
-            ],
+            ]
         },
 
         fallbacks=[
@@ -311,10 +385,10 @@ def main():
         ]
     )
 
-    # ⚠️ ВАЖНО: conversation первым
-    app.add_handler(conv)
+    # ⚠️ Conversation FIRST
+    app.add_handler(conv_handler)
 
-    # handlers
+    # other handlers
     app.add_handler(CommandHandler("start", start))
 
     app.add_handler(
@@ -324,15 +398,21 @@ def main():
         )
     )
 
-    app.add_handler(CallbackQueryHandler(status_handler))
+    app.add_handler(
+        CallbackQueryHandler(status_handler)
+    )
 
-    app.add_handler(CommandHandler("reply", reply))
+    app.add_handler(
+        CommandHandler("reply", reply)
+    )
 
     print("BOT STARTED")
 
     app.run_polling()
 
-# ================= START APP =================
+# =========================
+# RUN
+# =========================
 
 if __name__ == "__main__":
     main()
