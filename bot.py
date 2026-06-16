@@ -12,7 +12,7 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 
 # 👉 сюда вставь свой Telegram ID (сделаю ниже как узнать)
-ADMIN_ID = 8879032988
+ADMIN_ID = 8308540295
 
 FROM, TO, DATE, CONFIRM = range(4)
 
