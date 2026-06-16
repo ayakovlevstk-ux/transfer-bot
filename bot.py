@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "8308540295"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # --- STATES ---
 FROM, TO, DATE = range(3)
