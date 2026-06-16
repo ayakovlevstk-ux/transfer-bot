@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8308540295"))
 
 # --- STATES ---
 FROM, TO, DATE = range(3)
@@ -65,7 +65,7 @@ async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- STEP 2 ---
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["to"] = update.message.text
-    await update.message.reply_text("📅 Когда поездка?")
+    await update.message.reply_text("📅 Когда поездка? (Пример 01.01.26 00:00)")
     return DATE
 
 # --- STEP 3 + CONFIRM BUTTONS ---
