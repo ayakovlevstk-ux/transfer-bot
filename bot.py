@@ -1,21 +1,27 @@
 import os
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    ContextTypes,
+    CallbackQueryHandler,
     ConversationHandler,
+    ContextTypes,
     filters
 )
 
 TOKEN = os.getenv("TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# 👉 сюда вставь свой Telegram ID (сделаю ниже как узнать)
-ADMIN_ID = 8308540295
+# --- STATES ---
+FROM, TO, DATE = range(3)
 
-FROM, TO, DATE, CONFIRM = range(4)
-
+# --- MENU ---
 menu_keyboard = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
@@ -33,108 +39,115 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=menu_keyboard
     )
 
-# --- START ORDER ---
-async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📍 Откуда вас забрать?",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return FROM
+# --- MENU HANDLER ---
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
+    if text == "🚕 Заказать трансфер":
+        await update.message.reply_text("📍 Откуда ты едешь?")
+        return FROM
+
+    elif text == "💰 Цены":
+        await update.message.reply_text("💰 Пример: Керкраде → Амстердам = 120€")
+    elif text == "📍 Маршруты":
+        await update.message.reply_text("📍 Керкраде → Амстердам\n📍 Керкраде → Брюссель")
+    elif text == "❓ Помощь":
+        await update.message.reply_text("Напиши маршрут и дату — я оформлю заказ 🚕")
+
+    return ConversationHandler.END
+
+# --- STEP 1 ---
 async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["from"] = update.message.text
     await update.message.reply_text("📍 Куда едем?")
     return TO
 
+# --- STEP 2 ---
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["to"] = update.message.text
-    await update.message.reply_text("📅 Дата и время? (пример: 20.06 14:30)")
+    await update.message.reply_text("📅 Когда поездка?")
     return DATE
 
+# --- STEP 3 + CONFIRM BUTTONS ---
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["date"] = update.message.text
 
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
+            InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
+        ]
+    ]
+
     summary = f"""
-🚕 НОВЫЙ ЗАКАЗ:
+🚕 НОВЫЙ ЗАКАЗ
 
 📍 Откуда: {context.user_data['from']}
 📍 Куда: {context.user_data['to']}
 📅 Когда: {context.user_data['date']}
-
-Напиши:
-✔ Да — подтвердить
-❌ Нет — отменить
-"""
-    await update.message.reply_text(summary)
-    return CONFIRM
-
-# --- CONFIRM ---
-async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-
-    if text == "да":
-        order = f"""
-🚕 ЗАКАЗ ПРИНЯТ
-
-📍 Откуда: {context.user_data['from']}
-📍 Куда: {context.user_data['to']}
-📅 Когда: {context.user_data['date']}
-👤 User: {update.effective_user.id}
 """
 
-        # 💾 сохраняем в файл
-        with open("orders.txt", "a", encoding="utf-8") as f:
-            f.write(order + "\n-----------------\n")
-
-        # 📩 отправляем админу
-        await context.bot.send_message(chat_id=ADMIN_ID, text=order)
-
-        await update.message.reply_text(
-            "✅ Заказ отправлен! Мы свяжемся с вами.",
-            reply_markup=menu_keyboard
-        )
-
-    else:
-        await update.message.reply_text(
-            "❌ Заказ отменён",
-            reply_markup=menu_keyboard
-        )
+    await update.message.reply_text(
+        summary,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
     return ConversationHandler.END
 
-# --- MENU ---
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# --- CALLBACK BUTTONS ---
+async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if text == "🚕 Заказать трансфер":
-        return await start_order(update, context)
+    if query.data == "confirm_yes":
 
-    elif text == "💰 Цены":
-        await update.message.reply_text("💰 От 80€ до 300€ в зависимости от маршрута")
+        order = f"""
+🚕 ЗАКАЗ ПРИНЯТ
 
-    elif text == "📍 Маршруты":
-        await update.message.reply_text("📍 Керкраде → Амстердам\n📍 Керкраде → Брюссель")
+📍 Откуда: {context.user_data.get('from')}
+📍 Куда: {context.user_data.get('to')}
+📅 Когда: {context.user_data.get('date')}
+👤 User: {query.from_user.id}
+"""
 
-    elif text == "❓ Помощь":
-        await update.message.reply_text("Нажми 🚕 Заказать трансфер и следуй шагам")
+        # save file
+        with open("orders.txt", "a", encoding="utf-8") as f:
+            f.write(order + "\n-----------------\n")
+
+        # send admin
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=order)
+        except Exception as e:
+            print("ADMIN ERROR:", e)
+
+        await query.message.edit_text("✅ Заказ подтверждён!")
+
+    else:
+        await query.message.edit_text("❌ Заказ отменён")
 
 # --- MAIN ---
 def main():
+    if not TOKEN:
+        raise ValueError("TOKEN не найден в переменных окружения Render")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("🚕 Заказать трансфер"), start_order)],
+        entry_points=[
+            MessageHandler(filters.Regex("🚕 Заказать трансфер"), handle_menu)
+        ],
         states={
             FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
             TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_to)],
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-            CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
         },
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True
     )
 
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_confirm))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     app.run_polling()
