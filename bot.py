@@ -43,119 +43,6 @@ FROM, TO, DATE, CONFIRM = range(4)
 orders = {}
 support_users = {}
 
-# language storage
-user_lang = {}
-
-# =========================
-# TRANSLATIONS
-# =========================
-
-TEXTS = {
-
-    "ru": {
-
-        "welcome":
-            "🌍 Выберите язык",
-
-        "menu":
-            "🚕 Добро пожаловать в Transfer Bot",
-
-        "order":
-            "🚕 Заказать трансфер",
-
-        "prices":
-            "💰 Цены",
-
-        "routes":
-            "📍 Маршруты",
-
-        "help":
-            "❓ Помощь",
-
-        "from":
-            "📍 Откуда вас забрать?",
-
-        "to":
-            "📍 Куда едем?",
-
-        "date":
-            "📅 Когда нужен трансфер?",
-
-        "confirm":
-            "Подтвердить заказ?",
-
-        "confirm_btn":
-            "✅ Подтвердить",
-
-        "cancel_btn":
-            "❌ Отмена",
-
-        "sent":
-            "✅ Заказ отправлен диспетчеру!",
-
-        "cancelled":
-            "❌ Заказ отменён",
-
-        "support":
-            "✍️ Напишите ваш вопрос",
-
-        "support_sent":
-            "✅ Сообщение отправлено оператору"
-    },
-
-    "en": {
-
-        "welcome":
-            "🌍 Choose language",
-
-        "menu":
-            "🚕 Welcome to Transfer Bot",
-
-        "order":
-            "🚕 Book transfer",
-
-        "prices":
-            "💰 Prices",
-
-        "routes":
-            "📍 Routes",
-
-        "help":
-            "❓ Support",
-
-        "from":
-            "📍 Pickup location?",
-
-        "to":
-            "📍 Destination?",
-
-        "date":
-            "📅 Transfer date/time?",
-
-        "confirm":
-            "Confirm order?",
-
-        "confirm_btn":
-            "✅ Confirm",
-
-        "cancel_btn":
-            "❌ Cancel",
-
-        "sent":
-            "✅ Order sent to dispatcher!",
-
-        "cancelled":
-            "❌ Order cancelled",
-
-        "support":
-            "✍️ Send your question",
-
-        "support_sent":
-            "✅ Message sent to operator"
-    }
-}
-
-
 # =========================
 # MENU
 # =========================
@@ -175,16 +62,9 @@ menu_keyboard = ReplyKeyboardMarkup(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    keyboard = ReplyKeyboardMarkup(
-        [
-            ["🇷🇺 Русский", "🇬🇧 English"]
-        ],
-        resize_keyboard=True
-    )
-
     await update.message.reply_text(
-        "🌍 Choose language / Выберите язык",
-        reply_markup=keyboard
+        "🚕 Добро пожаловать в Transfer Bot",
+        reply_markup=menu_keyboard
     )
 
 # =========================
@@ -586,10 +466,8 @@ def main():
         ]
     )
 
-    # основной заказ
     app.add_handler(conv_handler)
 
-    # команды
     app.add_handler(CommandHandler("start", start))
 
     app.add_handler(
