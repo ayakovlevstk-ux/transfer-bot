@@ -7,7 +7,7 @@ from telegram import (
     Update,
     ReplyKeyboardMarkup,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
 
 from telegram.ext import (
@@ -17,7 +17,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     ApplicationHandlerStop,
-    filters
+    filters,
 )
 
 TOKEN = os.getenv("TOKEN")
@@ -37,27 +37,29 @@ MENU = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
         ["💰 Цены", "📍 Маршруты"],
-        ["❓ Помощь"]
+        ["❓ Помощь"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 CONFIRM_KB = ReplyKeyboardMarkup(
     [
         ["✅ Подтвердить", "❌ Отмена"],
-        ["⬅️ Назад"]
+        ["⬅️ Назад"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
-PAYMENT_KB = InlineKeyboardMarkup([
+PAYMENT_KB = InlineKeyboardMarkup(
     [
-        InlineKeyboardButton(
-            "💳 Я оплатил",
-            callback_data="paid"
-        )
+        [
+            InlineKeyboardButton(
+                "💳 Я оплатил",
+                callback_data="paid",
+            )
+        ]
     ]
-])
+)
 
 # =========================
 # MEMORY
@@ -65,14 +67,16 @@ PAYMENT_KB = InlineKeyboardMarkup([
 
 users = {}
 
+
 def get_user(user_id: int):
     if user_id not in users:
         users[user_id] = {
             "step": None,
             "status": None,
-            "timer_task": None
+            "timer_task": None,
         }
     return users[user_id]
+
 
 # =========================
 # START
@@ -84,8 +88,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "Привет! 🚕 Выбери действие:",
-        reply_markup=MENU
+        reply_markup=MENU,
     )
+
 
 # =========================
 # ROUTER
@@ -147,39 +152,39 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📍 Откуда: {user['from']}\n"
             f"🏁 Куда: {user['to']}\n"
             f"📅 Дата: {user['date']}",
-            reply_markup=CONFIRM_KB
+            reply_markup=CONFIRM_KB,
         )
         return
 
     # CONFIRM
     if step == "confirm":
-
         if text == "❌ Отмена":
             user["step"] = None
             user["status"] = "rejected"
 
             await update.message.reply_text(
                 "Заказ отменен ❌",
-                reply_markup=MENU
+                reply_markup=MENU,
             )
             return
 
         if text == "✅ Подтвердить":
-
             user["status"] = "waiting"
 
-            keyboard = InlineKeyboardMarkup([
+            keyboard = InlineKeyboardMarkup(
                 [
-                    InlineKeyboardButton(
-                        "✅ Подтвердить",
-                        callback_data=f"accept_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Отклонить",
-                        callback_data=f"reject_{user_id}"
-                    )
+                    [
+                        InlineKeyboardButton(
+                            "✅ Подтвердить",
+                            callback_data=f"accept_{user_id}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Отклонить",
+                            callback_data=f"reject_{user_id}",
+                        ),
+                    ]
                 ]
-            ])
+            )
 
             order_text = (
                 "🚕 НОВАЯ ЗАЯВКА\n\n"
@@ -193,18 +198,19 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=order_text,
-                reply_markup=keyboard
+                reply_markup=keyboard,
             )
 
             await update.message.reply_text(
                 "⏳ Заявка отправлена",
-                reply_markup=MENU
+                reply_markup=MENU,
             )
 
             user["step"] = None
             return
 
     await update.message.reply_text("Используй меню 👇", reply_markup=MENU)
+
 
 # =========================
 # CALLBACKS
@@ -237,7 +243,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ Оплата получена!\n\n"
                 "🚕 Ваше место ЗАКРЕПЛЕНО за вами\n"
                 "Спасибо за бронь!"
-            )
+            ),
         )
 
         return
@@ -256,7 +262,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🚕 Рейс подтверждён!\n\n"
                 "💳 Для бронирования места необходимо оплатить 50%\n"
                 "⚠️ Без оплаты место НЕ закреплено"
-            )
+            ),
         )
 
         await query.message.reply_text(
@@ -278,18 +284,18 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             chat_id=client_id,
-            text="❌ Ваш заказ был отклонён"
+            text="❌ Ваш заказ был отклонён",
         )
 
         await query.message.reply_text("Заявка отклонена ❌")
         return
+
 
 # =========================
 # ADMIN PRICE
 # =========================
 
 async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.message.from_user.id != ADMIN_ID:
         return
 
@@ -321,7 +327,7 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 Оплатить: {payment_link}\n\n"
             "⚠️ После оплаты место будет закреплено"
         ),
-        reply_markup=PAYMENT_KB
+        reply_markup=PAYMENT_KB,
     )
 
     if user.get("timer_task"):
@@ -339,6 +345,7 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     raise ApplicationHandlerStop
 
+
 # =========================
 # DEPOSIT TIMER
 # =========================
@@ -350,7 +357,6 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     # проверяем: человек НЕ оплатил
     if user["status"] == "awaiting_deposit":
-
         user["status"] = None
         user["timer_task"] = None
 
@@ -360,8 +366,10 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
                 "⏳ Время оплаты истекло\n\n"
                 "❌ Ваша бронь снята\n"
                 "Вы можете оформить заказ заново"
-            )
+            ),
         )
+
+
 # =========================
 # RENDER HEALTH SERVER
 # =========================
@@ -382,12 +390,13 @@ def run_health_server():
 
     server = ThreadingHTTPServer(
         ("0.0.0.0", port),
-        HealthHandler
+        HealthHandler,
     )
 
     print(f"HEALTH SERVER STARTED ON PORT {port}", flush=True)
     server.serve_forever()
-    
+
+
 # =========================
 # MAIN
 # =========================
@@ -395,7 +404,7 @@ def run_health_server():
 def main():
     threading.Thread(
         target=run_health_server,
-        daemon=True
+        daemon=True,
     ).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
@@ -406,12 +415,12 @@ def main():
 
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, admin_price),
-        group=0
+        group=0,
     )
 
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, router),
-        group=1
+        group=1,
     )
 
     print("BOT STARTED", flush=True)
