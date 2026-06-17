@@ -23,6 +23,8 @@ if not TOKEN:
 
 ADMIN_ID = 8308540295
 
+PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
+
 # =========================
 # KEYBOARDS
 # =========================
@@ -52,7 +54,10 @@ users = {}
 
 def get_user(user_id: int):
     if user_id not in users:
-        users[user_id] = {"step": None}
+        users[user_id] = {
+            "step": None,
+            "status": None
+        }
     return users[user_id]
 
 # =========================
@@ -79,93 +84,65 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = user.get("step")
 
-    # ================= MENU =================
-
+    # MENU
     if text == "🚕 Заказать трансфер":
         user["step"] = "from"
-
-        await update.message.reply_text(
-            "Откуда едем?"
-        )
+        await update.message.reply_text("Откуда едем?")
         return
 
     if text == "💰 Цены":
-        await update.message.reply_text(
-            "Керкраде → Амстердам = 120€"
-        )
+        await update.message.reply_text("Керкраде → Амстердам = 120€")
         return
 
     if text == "📍 Маршруты":
         await update.message.reply_text(
-            "Керкраде → Амстердам\n"
-            "Керкраде → Брюссель"
+            "Керкраде → Амстердам\nКеркраде → Брюссель"
         )
         return
 
     if text == "❓ Помощь":
-        await update.message.reply_text(
-            "Напиши маршрут, и я помогу 🚕"
-        )
+        await update.message.reply_text("Напиши маршрут, и я помогу 🚕")
         return
-
-    # ================= BACK =================
 
     if text == "⬅️ Назад":
         user["step"] = None
-
-        await update.message.reply_text(
-            "Меню:",
-            reply_markup=MENU
-        )
+        await update.message.reply_text("Меню:", reply_markup=MENU)
         return
 
-    # ================= FROM =================
-
+    # FROM
     if step == "from":
         user["from"] = text
         user["step"] = "to"
-
-        await update.message.reply_text(
-            "Куда едем?"
-        )
+        await update.message.reply_text("Куда едем?")
         return
 
-    # ================= TO =================
-
+    # TO
     if step == "to":
         user["to"] = text
         user["step"] = "date"
-
-        await update.message.reply_text(
-            "Введите дату поездки 📅\n\nНапример: 25.06.2026"
-        )
+        await update.message.reply_text("Введите дату 📅")
         return
 
-    # ================= DATE =================
-
+    # DATE
     if step == "date":
         user["date"] = text
         user["step"] = "confirm"
 
-        text_confirm = (
-            "🚕 Проверь заказ:\n\n"
-            f"📍 Откуда: {user.get('from')}\n"
-            f"🏁 Куда: {user.get('to')}\n"
-            f"📅 Дата: {user.get('date')}"
-        )
-
         await update.message.reply_text(
-            text_confirm,
+            f"🚕 Проверь заказ:\n\n"
+            f"📍 Откуда: {user['from']}\n"
+            f"🏁 Куда: {user['to']}\n"
+            f"📅 Дата: {user['date']}",
             reply_markup=CONFIRM_KB
         )
         return
 
-    # ================= CONFIRM =================
-
+    # CONFIRM
     if step == "confirm":
 
         if text == "❌ Отмена":
             user["step"] = None
+            user["status"] = "rejected"
 
             await update.message.reply_text(
                 "Заказ отменен ❌",
@@ -175,11 +152,17 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "✅ Подтвердить":
 
+            user["status"] = "waiting"
+
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
-                        "✅ Подтвердить рейс",
+                        "✅ Подтвердить",
                         callback_data=f"accept_{user_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отклонить",
+                        callback_data=f"reject_{user_id}"
                     )
                 ]
             ])
@@ -187,9 +170,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_text = (
                 "🚕 НОВАЯ ЗАЯВКА\n\n"
                 f"👤 Клиент: {user_id}\n"
-                f"📍 Откуда: {user.get('from')}\n"
-                f"🏁 Куда: {user.get('to')}\n"
-                f"📅 Дата: {user.get('date')}"
+                f"📍 Откуда: {user['from']}\n"
+                f"🏁 Куда: {user['to']}\n"
+                f"📅 Дата: {user['date']}\n"
+                f"📊 Статус: waiting"
             )
 
             await context.bot.send_message(
@@ -199,68 +183,86 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             await update.message.reply_text(
-                "⏳ Заявка отправлена.\nОжидайте подтверждения рейса.",
+                "⏳ Заявка отправлена",
                 reply_markup=MENU
             )
 
             user["step"] = None
             return
 
-    # ================= FALLBACK =================
+    await update.message.reply_text("Используй меню 👇", reply_markup=MENU)
 
-    await update.message.reply_text(
-        "Используй меню 👇",
-        reply_markup=MENU
-    )
+# =========================
+# CALLBACKS (ADMIN)
+# =========================
 
-    # =========================
-    # CALLBACKS
-    # =========================
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
 
+    # ================= ACCEPT =================
     if data.startswith("accept_"):
-
         client_id = int(data.split("_")[1])
+        user = get_user(client_id)
 
+        user["status"] = "accepted"
         context.user_data["price_for"] = client_id
 
-        await query.message.reply_text(
-            "Введите цену для клиента 💰"
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="✅ Рейс подтверждён!\nОжидайте цену 💰"
         )
 
-   # =========================
-   # ADMIN PRICE
-   # =========================
+        await query.message.reply_text("Введите цену для клиента 💰")
+        return
+
+    # ================= REJECT =================
+    if data.startswith("reject_"):
+        client_id = int(data.split("_")[1])
+        user = get_user(client_id)
+
+        user["status"] = "rejected"
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="❌ Ваш заказ был отклонён"
+        )
+
+        await query.message.reply_text("Заявка отклонена ❌")
+        return
+
+# =========================
+# ADMIN PRICE
+# =========================
 
 async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # только админ
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    # если бот не ждет цену
     if "price_for" not in context.user_data:
         return
 
     client_id = context.user_data["price_for"]
-
     price = update.message.text
+
+    user = get_user(client_id)
+    user["status"] = "price_sent"
+
+    payment_link = PAYMENT_BASE_URL + str(client_id)
 
     await context.bot.send_message(
         chat_id=client_id,
         text=(
-            "✅ Ваш рейс подтвержден!\n\n"
-            f"💰 Стоимость поездки: {price}"
+            "💰 Ваш рейс подтверждён!\n\n"
+            f"💵 Цена: {price}\n"
+            f"💳 Оплата: {payment_link}"
         )
     )
 
-    await update.message.reply_text(
-        "Цена отправлена клиенту ✅"
-    )
+    await update.message.reply_text("Цена отправлена клиенту ✅")
 
     del context.user_data["price_for"]
 
@@ -273,29 +275,21 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    # callback кнопки
     app.add_handler(CallbackQueryHandler(callbacks))
 
-    # админ вводит цену
     app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            admin_price
-        ),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, admin_price),
         group=0
     )
 
-    # основной router
     app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            router
-        ),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, router),
         group=1
     )
 
     print("BOT STARTED")
 
     app.run_polling(drop_pending_updates=True)
+
 if __name__ == "__main__":
     main()
