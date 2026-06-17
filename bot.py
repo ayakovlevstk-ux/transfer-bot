@@ -1,3 +1,4 @@
+```python
 import os
 import time
 
@@ -150,6 +151,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     # CANCEL
+
     if text == "❌ Отмена":
 
         await update.message.reply_text(
@@ -160,6 +162,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     # CONFIRM
+
     if text == "✅ Подтвердить":
 
         order_id = str(int(time.time()))
@@ -168,7 +171,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "from": context.user_data["from"],
             "to": context.user_data["to"],
             "date": context.user_data["date"],
-            "status": "NEW",
+            "status": "🆕 НОВЫЙ",
             "user_id": user.id
         }
 
@@ -182,58 +185,56 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📍 Куда: {orders[order_id]['to']}
 📅 Когда: {orders[order_id]['date']}
 
-📊 Статус: NEW
+📊 Статус: {orders[order_id]['status']}
 """
 
         keyboard = [
 
-    [
-        InlineKeyboardButton(
-            "✅ Принять",
-            callback_data=f"accept_{order_id}"
-        ),
+            [
+                InlineKeyboardButton(
+                    "✅ Принять",
+                    callback_data=f"accept_{order_id}"
+                ),
 
-        InlineKeyboardButton(
-            "❌ Отменить",
-            callback_data=f"reject_{order_id}"
-        )
-    ],
+                InlineKeyboardButton(
+                    "❌ Отменить",
+                    callback_data=f"reject_{order_id}"
+                )
+            ],
 
-    [
-        InlineKeyboardButton(
-            "🚗 Выехал",
-            callback_data=f"arriving_{order_id}"
-        ),
+            [
+                InlineKeyboardButton(
+                    "🚗 Выехал",
+                    callback_data=f"arriving_{order_id}"
+                ),
 
-        InlineKeyboardButton(
-            "📍 На месте",
-            callback_data=f"arrived_{order_id}"
-        )
-    ],
+                InlineKeyboardButton(
+                    "📍 На месте",
+                    callback_data=f"arrived_{order_id}"
+                )
+            ],
 
-    [
-        InlineKeyboardButton(
-            "👤 Клиент в машине",
-            callback_data=f"picked_{order_id}"
-        )
-    ],
+            [
+                InlineKeyboardButton(
+                    "👤 Клиент в машине",
+                    callback_data=f"picked_{order_id}"
+                )
+            ],
 
-    [
-        InlineKeyboardButton(
-            "🛣 В пути",
-            callback_data=f"progress_{order_id}"
-        ),
+            [
+                InlineKeyboardButton(
+                    "🛣 В пути",
+                    callback_data=f"progress_{order_id}"
+                ),
 
-        InlineKeyboardButton(
-            "🏁 Завершён",
-            callback_data=f"done_{order_id}"
-        )
-    ]
-]
+                InlineKeyboardButton(
+                    "🏁 Завершён",
+                    callback_data=f"done_{order_id}"
+                )
+            ]
+        ]
 
-        # =========================
         # SEND TO ADMIN
-        # =========================
 
         try:
 
@@ -341,7 +342,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # STATUS HANDLER
 # =========================
 
-```python
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -385,7 +385,58 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 Статус: {o['status']}
 """
 
-    await query.message.edit_text(new_text)
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "✅ Принять",
+                callback_data=f"accept_{order_id}"
+            ),
+
+            InlineKeyboardButton(
+                "❌ Отменить",
+                callback_data=f"reject_{order_id}"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🚗 Выехал",
+                callback_data=f"arriving_{order_id}"
+            ),
+
+            InlineKeyboardButton(
+                "📍 На месте",
+                callback_data=f"arrived_{order_id}"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "👤 Клиент в машине",
+                callback_data=f"picked_{order_id}"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🛣 В пути",
+                callback_data=f"progress_{order_id}"
+            ),
+
+            InlineKeyboardButton(
+                "🏁 Завершён",
+                callback_data=f"done_{order_id}"
+            )
+        ]
+    ]
+
+    await query.message.edit_text(
+        text=new_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    # SEND STATUS TO CLIENT
 
     try:
 
@@ -416,27 +467,6 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=o["user_id"],
             text=client_status_map[o["status"]]
-        )
-
-    except Exception as e:
-
-        print("CLIENT STATUS ERROR:", e)
-```
-
-    # CLIENT STATUS MESSAGE
-
-    try:
-
-        status_map = {
-            "ACCEPTED": "✅ Ваш заказ принят",
-            "REJECTED": "❌ Ваш заказ отклонён",
-            "IN PROGRESS": "🚗 Водитель выехал",
-            "DONE": "🏁 Заказ завершён"
-        }
-
-        await context.bot.send_message(
-            chat_id=o["user_id"],
-            text=status_map[o["status"]]
         )
 
     except Exception as e:
@@ -555,3 +585,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
