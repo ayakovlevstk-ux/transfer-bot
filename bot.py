@@ -1,192 +1,57 @@
 import os
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton
-)
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    ConversationHandler,
     ContextTypes,
     filters
 )
 
-# =========================
-# CONFIG
-# =========================
-
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = 8308540295
 
-if not TOKEN:
-    raise ValueError("TOKEN не найден")
-
-# =========================
-# STATES
-# =========================
-
-FROM, TO, DATE, LOCATION, CONFIRM = range(5)
-
-BACK = "⬅️ Назад"
-
-# =========================
-# START
-# =========================
+# --- КНОПКИ МЕНЮ ---
+menu_keyboard = ReplyKeyboardMarkup(
+    [
+        ["🚕 Заказать трансфер"],
+        ["💰 Цены"],
+        ["📍 Маршруты"],
+        ["❓ Помощь"]
+    ],
+    resize_keyboard=True
+)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = ReplyKeyboardMarkup(
-        [["🚕 Заказать трансфер"]],
-        resize_keyboard=True
-    )
-
     await update.message.reply_text(
-        "Привет! Нажми кнопку чтобы начать заказ.",
-        reply_markup=keyboard
+        "Привет! Я бот трансферов 🚕\nВыбери действие:",
+        reply_markup=menu_keyboard
     )
 
-# =========================
-# ORDER FLOW
-# =========================
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Откуда едем?")
-    return FROM
+    if text == "🚕 Заказать трансфер":
+        await update.message.reply_text("Напиши: откуда и куда ты хочешь поехать 🚕")
 
+    elif text == "💰 Цены":
+        await update.message.reply_text("Цены зависят от маршрута. Пример: Керкраде → Амстердам = 120€")
 
-async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif text == "📍 Маршруты":
+        await update.message.reply_text("Доступные маршруты:\n- Керкраде → Амстердам\n- Керкраде → Брюссель")
 
-    if update.message.text == BACK:
-        await update.message.reply_text("Откуда едем?")
-        return FROM
+    elif text == "❓ Помощь":
+        await update.message.reply_text("Напиши свой маршрут, и я рассчитаю стоимость 🚕")
 
-    context.user_data["from"] = update.message.text
-    await update.message.reply_text("Куда едем?")
-    return TO
-
-
-async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.text == BACK:
-        await update.message.reply_text("Откуда едем?")
-        return FROM
-
-    context.user_data["to"] = update.message.text
-    await update.message.reply_text("Дата поездки?")
-    return DATE
-
-
-async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.text == BACK:
-        await update.message.reply_text("Куда едем?")
-        return TO
-
-    context.user_data["date"] = update.message.text
-
-    keyboard = ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
-            [KeyboardButton(BACK)]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-    await update.message.reply_text(
-        "Отправь геолокацию кнопкой:",
-        reply_markup=keyboard
-    )
-
-    return LOCATION
-
-
-async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.text == BACK:
-        await update.message.reply_text("Введите дату снова:")
-        return DATE
-
-    loc = update.message.location
-
-    context.user_data["lat"] = loc.latitude
-    context.user_data["lon"] = loc.longitude
-
-    maps_link = f"https://maps.google.com/?q={loc.latitude},{loc.longitude}"
-
-    text = (
-        "Проверь заказ:\n\n"
-        f"Откуда: {context.user_data['from']}\n"
-        f"Куда: {context.user_data['to']}\n"
-        f"Дата: {context.user_data['date']}\n"
-        f"Локация: {maps_link}"
-    )
-
-    keyboard = ReplyKeyboardMarkup(
-        [
-            ["✅ Подтвердить", "❌ Отмена"],
-            [BACK]
-        ],
-        resize_keyboard=True
-    )
-
-    await update.message.reply_text(text, reply_markup=keyboard)
-
-    return CONFIRM
-
-
-async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    text = update.message.text.lower()
-
-    if text == BACK:
-        await update.message.reply_text("Отправьте геолокацию снова:")
-        return LOCATION
-
-    if "подтверд" in text:
-        await update.message.reply_text("Заказ создан 🚕")
     else:
-        await update.message.reply_text("Отменено")
-
-    return ConversationHandler.END
-
-# =========================
-# CANCEL
-# =========================
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено.")
-    return ConversationHandler.END
-
-# =========================
-# MAIN
-# =========================
+        await update.message.reply_text("Я не понял сообщение. Выбери пункт меню 👇", reply_markup=menu_keyboard)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    conv = ConversationHandler(
-    entry_points=[
-        CommandHandler("start", start_order),
-        MessageHandler(filters.Regex("🚕 Заказать трансфер"), start_order),
-    ],
-    states={
-        FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
-        TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_to)],
-        DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-        LOCATION: [MessageHandler(filters.LOCATION, get_location)],
-        CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("BOT STARTED")
-    app.run_polling(drop_pending_updates=True)
-
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
