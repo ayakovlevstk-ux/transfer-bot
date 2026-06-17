@@ -1,5 +1,9 @@
 import os
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -13,21 +17,22 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
+ADMIN_ID = 8308540295
+
 # =========================
-# MENU
+# KEYBOARDS
 # =========================
 
-menu_keyboard = ReplyKeyboardMarkup(
+MENU = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
-        ["💰 Цены"],
-        ["📍 Маршруты"],
+        ["💰 Цены", "📍 Маршруты"],
         ["❓ Помощь"]
     ],
     resize_keyboard=True
 )
 
-location_keyboard = ReplyKeyboardMarkup(
+LOCATION_KB = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
         ["⬅️ Назад"]
@@ -35,7 +40,7 @@ location_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-confirm_keyboard = ReplyKeyboardMarkup(
+CONFIRM_KB = ReplyKeyboardMarkup(
     [
         ["✅ Подтвердить", "❌ Отмена"],
         ["⬅️ Назад"]
@@ -44,37 +49,45 @@ confirm_keyboard = ReplyKeyboardMarkup(
 )
 
 # =========================
-# STATE STORAGE (простое)
+# MEMORY (simple in-memory state)
 # =========================
 
-user_data = {}
+users = {}
+
+def get_user(user_id: int):
+    if user_id not in users:
+        users[user_id] = {"step": None}
+    return users[user_id]
 
 # =========================
 # START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.message.from_user.id)
+    user["step"] = None
+
     await update.message.reply_text(
-        "Привет! Я бот трансферов 🚕\nВыбери действие:",
-        reply_markup=menu_keyboard
+        "Привет! 🚕 Выбери действие:",
+        reply_markup=MENU
     )
 
 # =========================
-# MAIN HANDLER
+# ROUTER (ONE HANDLER RULE)
 # =========================
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    text = update.message.text
+    user = get_user(user_id)
 
-    if user_id not in user_data:
-        user_data[user_id] = {}
+    step = user.get("step")
 
     # ================= MENU =================
 
     if text == "🚕 Заказать трансфер":
+        user["step"] = "from"
         await update.message.reply_text("Откуда едем?")
-        user_data[user_id]["step"] = "from"
         return
 
     if text == "💰 Цены":
@@ -86,82 +99,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "❓ Помощь":
-        await update.message.reply_text("Напиши маршрут и я помогу 🚕")
+        await update.message.reply_text("Напиши маршрут, и я помогу 🚕")
         return
 
     # ================= FLOW =================
 
-    step = user_data[user_id].get("step")
+    if text == "⬅️ Назад":
+        user["step"] = None
+        await update.message.reply_text("Меню:", reply_markup=MENU)
+        return
 
     # FROM
     if step == "from":
-        user_data[user_id]["from"] = text
-        user_data[user_id]["step"] = "to"
+        user["from"] = text
+        user["step"] = "to"
         await update.message.reply_text("Куда едем?")
         return
 
     # TO
     if step == "to":
-        user_data[user_id]["to"] = text
-        user_data[user_id]["step"] = "location"
+        user["to"] = text
+        user["step"] = "location"
+
         await update.message.reply_text(
             "Отправь геолокацию 📍",
-            reply_markup=location_keyboard
+            reply_markup=LOCATION_KB
         )
         return
 
-    # BACK
-    if text == "⬅️ Назад":
-        user_data[user_id]["step"] = None
-        await update.message.reply_text("Главное меню:", reply_markup=menu_keyboard)
-        return
+    # CONFIRM TEXT
+    if step == "confirm":
+        if text == "❌ Отмена":
+            user["step"] = None
+            await update.message.reply_text("Отменено", reply_markup=MENU)
+            return
 
-    await update.message.reply_text("Выбери пункт меню 👇", reply_markup=menu_keyboard)
+        if text == "⬅️ Назад":
+            user["step"] = "location"
+            await update.message.reply_text(
+                "Отправь геолокацию 📍",
+                reply_markup=LOCATION_KB
+            )
+            return
+
+        if text == "✅ Подтвердить":
+            await update.message.reply_text("Заказ принят 🚕", reply_markup=MENU)
+
+            # optional admin notify
+            print("NEW ORDER:", user)
+
+            user["step"] = None
+            return
+
+    # fallback
+    await update.message.reply_text("Используй меню 👇", reply_markup=MENU)
 
 # =========================
-# LOCATION HANDLER
+# LOCATION
 # =========================
 
-async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    user = get_user(user_id)
+
     loc = update.message.location
 
-    if user_id not in user_data:
-        user_data[user_id] = {}
+    user["lat"] = loc.latitude
+    user["lon"] = loc.longitude
 
-    user_data[user_id]["lat"] = loc.latitude
-    user_data[user_id]["lon"] = loc.longitude
+    user["step"] = "confirm"
 
-    link = f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}"
+    map_link = f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}"
 
     text = (
         "🚕 Проверь заказ:\n\n"
-        f"Откуда: {user_data[user_id].get('from')}\n"
-        f"Куда: {user_data[user_id].get('to')}\n"
-        f"Локация: {link}"
+        f"Откуда: {user.get('from')}\n"
+        f"Куда: {user.get('to')}\n"
+        f"📍 Локация: {map_link}"
     )
 
-    user_data[user_id]["step"] = "confirm"
-
-    await update.message.reply_text(text, reply_markup=confirm_keyboard)
-
-# =========================
-# CONFIRM
-# =========================
-
-async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user_id = update.message.from_user.id
-
-    if text == "✅ Подтвердить":
-        await update.message.reply_text("Заказ принят 🚕", reply_markup=menu_keyboard)
-
-    elif text == "❌ Отмена":
-        await update.message.reply_text("Отменено", reply_markup=menu_keyboard)
-
-    elif text == "⬅️ Назад":
-        user_data[user_id]["step"] = "location"
-        await update.message.reply_text("Отправь геолокацию снова 📍", reply_markup=location_keyboard)
+    await update.message.reply_text(
+        text,
+        reply_markup=CONFIRM_KB
+    )
 
 # =========================
 # MAIN
@@ -172,9 +192,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_confirm))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # ONLY TWO HANDLERS (IMPORTANT)
+    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
     print("BOT STARTED")
     app.run_polling(drop_pending_updates=True)
