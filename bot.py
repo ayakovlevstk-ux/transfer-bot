@@ -167,20 +167,19 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^🚕 Заказать трансфер$"), start_order)
-        ],
-        states={
-            FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
-            TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_to)],
-            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-            LOCATION: [MessageHandler(filters.LOCATION | (filters.TEXT & ~filters.COMMAND), get_location)],
-            CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel)
-        ],
-    )
+    entry_points=[
+        CommandHandler("start", start_order),
+        MessageHandler(filters.Regex("🚕 Заказать трансфер"), start_order),
+    ],
+    states={
+        FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
+        TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_to)],
+        DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+        LOCATION: [MessageHandler(filters.LOCATION, get_location)],
+        CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
