@@ -186,30 +186,50 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    "✅ Принять",
-                    callback_data=f"accept_{order_id}"
-                ),
 
-                InlineKeyboardButton(
-                    "❌ Отказать",
-                    callback_data=f"reject_{order_id}"
-                )
-            ],
+    [
+        InlineKeyboardButton(
+            "✅ Принять",
+            callback_data=f"accept_{order_id}"
+        ),
 
-            [
-                InlineKeyboardButton(
-                    "🚗 В пути",
-                    callback_data=f"progress_{order_id}"
-                ),
+        InlineKeyboardButton(
+            "❌ Отменить",
+            callback_data=f"reject_{order_id}"
+        )
+    ],
 
-                InlineKeyboardButton(
-                    "🏁 Завершён",
-                    callback_data=f"done_{order_id}"
-                )
-            ]
-        ]
+    [
+        InlineKeyboardButton(
+            "🚗 Выехал",
+            callback_data=f"arriving_{order_id}"
+        ),
+
+        InlineKeyboardButton(
+            "📍 На месте",
+            callback_data=f"arrived_{order_id}"
+        )
+    ],
+
+    [
+        InlineKeyboardButton(
+            "👤 Клиент в машине",
+            callback_data=f"picked_{order_id}"
+        )
+    ],
+
+    [
+        InlineKeyboardButton(
+            "🛣 В пути",
+            callback_data=f"progress_{order_id}"
+        ),
+
+        InlineKeyboardButton(
+            "🏁 Завершён",
+            callback_data=f"done_{order_id}"
+        )
+    ]
+]
 
         # =========================
         # SEND TO ADMIN
@@ -337,17 +357,20 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    if action == "accept":
-        orders[order_id]["status"] = "ACCEPTED"
+    status_map = {
 
-    elif action == "reject":
-        orders[order_id]["status"] = "REJECTED"
+    "accept": "✅ ПРИНЯТ",
+    "arriving": "🚗 ВОДИТЕЛЬ ВЫЕХАЛ",
+    "arrived": "📍 ВОДИТЕЛЬ НА МЕСТЕ",
+    "picked": "👤 КЛИЕНТ В МАШИНЕ",
+    "progress": "🛣 В ПУТИ",
+    "done": "🏁 ЗАВЕРШЁН",
+    "reject": "❌ ОТМЕНЁН"
 
-    elif action == "progress":
-        orders[order_id]["status"] = "IN PROGRESS"
+}
 
-    elif action == "done":
-        orders[order_id]["status"] = "DONE"
+if action in status_map:
+    orders[order_id]["status"] = status_map[action]
 
     o = orders[order_id]
 
