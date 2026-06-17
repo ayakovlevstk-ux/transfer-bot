@@ -18,12 +18,14 @@ from telegram.ext import (
     filters,
 )
 
+
 # =========================
 # CONFIG
 # =========================
 
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = 8308540295
+
 
 if not TOKEN:
     raise ValueError("TOKEN не найден")
@@ -32,7 +34,7 @@ if not TOKEN:
 # STATES
 # =========================
 
-FROM, TO, DATE, CONFIRM = range(4)
+FROM, TO, DATE, LOCATION, CONFIRM = range(5)
 
 # =========================
 # STORAGE
@@ -93,10 +95,22 @@ async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return DATE
 
 
-async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_date(update, context):
     context.user_data["date"] = update.message.text
 
-    summary = f"""
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    await update.message.reply_text(
+        "Отправь геолокацию 📍",
+        reply_markup=keyboard
+    )
+
+    return LOCATION
+
 🚕 ПРОВЕРЬТЕ ЗАКАЗ
 
 📍 Откуда: {context.user_data['from']}
@@ -272,6 +286,20 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Отправлено оператору")
         del support_users[user_id]
 
+async def get_location(update, context):
+    loc = update.message.location
+
+    context.user_data["lat"] = loc.latitude
+    context.user_data["lon"] = loc.longitude
+
+    maps_link = f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}"
+
+    await update.message.reply_text(
+        f"📍 Геолокация получена\n{maps_link}\n\nПодтверждаем заказ?"
+    )
+
+    return CONFIRM
+
 # =========================
 # MAIN
 # =========================
@@ -295,7 +323,13 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(status_handler))
-    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    states={
+    FROM: [MessageHandler(filters.TEXT, get_from)],
+    TO: [MessageHandler(filters.TEXT, get_to)],
+    DATE: [MessageHandler(filters.TEXT, get_date)],
+    LOCATION: [MessageHandler(filters.LOCATION, location_handler)],
+    CONFIRM: [MessageHandler(filters.TEXT, confirm)],
+}
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
     print("BOT STARTED")
