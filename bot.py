@@ -1,73 +1,59 @@
 import os
-import logging
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
-# =========================
-# CONFIG
-# =========================
-
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = 8308540295
 
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
 # =========================
 # STATES
 # =========================
-
 FROM, TO, DATE, LOCATION, CONFIRM = range(5)
 
 # =========================
 # START
 # =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["🚕 Заказать трансфер"]]
-
     await update.message.reply_text(
-        "Добро пожаловать! Нажмите кнопку ниже:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        "Привет! Нажми 🚕 Заказать трансфер"
     )
 
 # =========================
-# ORDER FLOW
+# ORDER START
 # =========================
-
 async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Откуда едем?")
     return FROM
 
-
+# =========================
+# FROM
+# =========================
 async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["from"] = update.message.text
     await update.message.reply_text("Куда едем?")
     return TO
 
-
+# =========================
+# TO
+# =========================
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["to"] = update.message.text
-    await update.message.reply_text("Укажите дату поездки:")
+    await update.message.reply_text("Введите дату поездки (например 20.06 14:00)")
     return DATE
 
-
+# =========================
+# DATE -> LOCATION BUTTON
+# =========================
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["date"] = update.message.text
 
@@ -78,13 +64,15 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        "Отправьте геолокацию:",
+        "Отправьте геолокацию 📍",
         reply_markup=keyboard
     )
 
     return LOCATION
 
-
+# =========================
+# LOCATION
+# =========================
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loc = update.message.location
 
@@ -93,46 +81,35 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     maps_link = f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}"
 
-    summary = (
-        "Проверьте заказ:\n\n"
-        f"Откуда: {context.user_data['from']}\n"
-        f"Куда: {context.user_data['to']}\n"
-        f"Дата: {context.user_data['date']}\n"
-        f"Локация: {maps_link}"
+    text = (
+        "📍 Геолокация получена\n"
+        f"{maps_link}\n\n"
+        "Проверьте заказ и подтвердите"
     )
 
-    await update.message.reply_text(summary)
-    await update.message.reply_text("Подтвердить заказ? (да/нет)")
-
+    await update.message.reply_text(text)
     return CONFIRM
 
-
+# =========================
+# CONFIRM
+# =========================
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-
-    if text not in ["да", "yes", "y"]:
-        await update.message.reply_text("Заказ отменён")
-        return ConversationHandler.END
-
     order_text = (
-        "НОВЫЙ ЗАКАЗ\n\n"
-        f"Откуда: {context.user_data['from']}\n"
-        f"Куда: {context.user_data['to']}\n"
-        f"Дата: {context.user_data['date']}\n"
-        f"Координаты: {context.user_data.get('lat')}, {context.user_data.get('lon')}"
+        "🚕 НОВЫЙ ЗАКАЗ\n\n"
+        f"📍 Откуда: {context.user_data.get('from')}\n"
+        f"📍 Куда: {context.user_data.get('to')}\n"
+        f"📅 Дата: {context.user_data.get('date')}\n"
+        f"🌍 Координаты: {context.user_data.get('lat')}, {context.user_data.get('lon')}"
     )
 
     await update.message.reply_text("Заказ принят!")
-
-    if ADMIN_ID:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=order_text)
+    await context.bot.send_message(chat_id=ADMIN_ID, text=order_text)
 
     return ConversationHandler.END
 
 # =========================
 # CANCEL
 # =========================
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено")
     return ConversationHandler.END
@@ -140,13 +117,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # MAIN
 # =========================
-
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^🚕 Заказать трансфер$"), start_order)
+            MessageHandler(filters.Regex("🚕 Заказать трансфер"), start_order)
         ],
         states={
             FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_from)],
@@ -163,7 +139,6 @@ def main():
 
     print("BOT STARTED")
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
