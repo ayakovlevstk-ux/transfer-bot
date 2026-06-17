@@ -175,7 +175,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "✅ Подтвердить":
 
-    keyboard = InlineKeyboardMarkup([
+            keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "✅ Подтвердить рейс",
