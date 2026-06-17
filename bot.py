@@ -113,9 +113,13 @@ async def get_date(update, context):
 
 await update.message.reply_text("🚕 ПРОВЕРЬТЕ ЗАКАЗ")
 
-📍 Откуда: {context.user_data['from']}
-📍 Куда: {context.user_data['to']}
-📅 Когда: {context.user_data['date']}
+text = (
+    f"📍 Откуда: {context.user_data['from']}\n"
+    f"📍 Куда: {context.user_data['to']}\n"
+    f"📅 Дата: {context.user_data['date']}"
+)
+
+await update.message.reply_text(text)
 """
 
     await update.message.reply_text(summary, reply_markup=confirm_keyboard)
