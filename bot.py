@@ -111,7 +111,7 @@ async def get_date(update, context):
 
     return LOCATION
 
-🚕 ПРОВЕРЬТЕ ЗАКАЗ
+await update.message.reply_text("🚕 ПРОВЕРЬТЕ ЗАКАЗ")
 
 📍 Откуда: {context.user_data['from']}
 📍 Куда: {context.user_data['to']}
