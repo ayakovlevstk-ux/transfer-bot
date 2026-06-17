@@ -1,11 +1,9 @@
-
 import os
 import time
 
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
-    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
@@ -20,34 +18,16 @@ from telegram.ext import (
     filters
 )
 
-# =========================
-# CONFIG
-# =========================
-
 TOKEN = os.getenv("TOKEN")
-
-# ВСТАВЬ СВОЙ TELEGRAM ID
 ADMIN_ID = 8308540295
 
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
-# =========================
-# STATES
-# =========================
-
 FROM, TO, DATE, CONFIRM = range(4)
-
-# =========================
-# STORAGE
-# =========================
 
 orders = {}
 support_users = {}
-
-# =========================
-# MENU
-# =========================
 
 menu_keyboard = ReplyKeyboardMarkup(
     [
@@ -58,141 +38,54 @@ menu_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# =========================
-# START
-# =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "🚕 Добро пожаловать в Transfer Bot",
         reply_markup=menu_keyboard
     )
 
-# =========================
-# ORDER START
-# =========================
-
 async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    location_keyboard = ReplyKeyboardMarkup(
-        [
-            [
-                KeyboardButton(
-                    "📍 Отправить геолокацию",
-                    request_location=True
-                )
-            ]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-    await update.message.reply_text(
-        "📍 Откуда вас забрать?\n\n"
-        "Можно отправить текст или геолокацию",
-        reply_markup=location_keyboard
-    )
-
+    await update.message.reply_text("📍 Откуда вас забрать?")
     return FROM
 
-# =========================
-# FROM
-# =========================
-
 async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.location:
-
-        lat = update.message.location.latitude
-        lon = update.message.location.longitude
-
-        context.user_data["from"] = f"{lat}, {lon}"
-
-    else:
-
-        context.user_data["from"] = update.message.text
-
-    await update.message.reply_text(
-        "📍 Куда едем?"
-    )
-
+    context.user_data["from"] = update.message.text
+    await update.message.reply_text("📍 Куда едем?")
     return TO
 
-# =========================
-# TO
-# =========================
-
 async def get_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     context.user_data["to"] = update.message.text
-
-    await update.message.reply_text(
-        "📅 Когда нужен трансфер?"
-    )
-
+    await update.message.reply_text("📅 Когда нужен трансфер?")
     return DATE
 
-# =========================
-# DATE
-# =========================
-
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     context.user_data["date"] = update.message.text
 
     summary = f"""
 🚕 ПРОВЕРЬТЕ ЗАКАЗ
 
-📍 Откуда:
-{context.user_data['from']}
-
-📍 Куда:
-{context.user_data['to']}
-
-📅 Когда:
-{context.user_data['date']}
-
-Подтвердить заказ?
+📍 Откуда: {context.user_data['from']}
+📍 Куда: {context.user_data['to']}
+📅 Когда: {context.user_data['date']}
 """
 
     keyboard = ReplyKeyboardMarkup(
-        [
-            ["✅ Подтвердить"],
-            ["❌ Отмена"]
-        ],
+        [["✅ Подтвердить"], ["❌ Отмена"]],
         resize_keyboard=True
     )
 
-    await update.message.reply_text(
-        summary,
-        reply_markup=keyboard
-    )
-
+    await update.message.reply_text(summary, reply_markup=keyboard)
     return CONFIRM
 
-# =========================
-# CONFIRM
-# =========================
-
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     text = update.message.text
     user = update.effective_user
 
-    # CANCEL
     if text == "❌ Отмена":
-
-        await update.message.reply_text(
-            "❌ Заказ отменён",
-            reply_markup=menu_keyboard
-        )
-
+        await update.message.reply_text("❌ Отменено", reply_markup=menu_keyboard)
         return ConversationHandler.END
 
-    # CONFIRM
     if text == "✅ Подтвердить":
-
         order_id = str(int(time.time()))
 
         orders[order_id] = {
@@ -203,407 +96,134 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "user_id": user.id
         }
 
-        maps_link = (
-            f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            f"{orders[order_id]['from']}"
-        )
-
-        order_text = f"""
+        admin_text = f"""
 🚕 НОВЫЙ ЗАКАЗ #{order_id}
 
-👤 Клиент: @{user.username}
-🆔 ID: {user.id}
-
-📍 Откуда:
-{orders[order_id]['from']}
-
-🗺 Google Maps:
-{maps_link}
-
-📍 Куда:
-{orders[order_id]['to']}
-
-📅 Когда:
-{orders[order_id]['date']}
-
-📊 Статус: NEW
+📍 Откуда: {orders[order_id]['from']}
+📍 Куда: {orders[order_id]['to']}
+📅 Когда: {orders[order_id]['date']}
 """
 
-        keyboard = [
+        keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(
-                    "✅ Принять",
-                    callback_data=f"accept_{order_id}"
-                ),
-
-                InlineKeyboardButton(
-                    "❌ Отказать",
-                    callback_data=f"reject_{order_id}"
-                )
+                InlineKeyboardButton("✅ Принять", callback_data=f"accept_{order_id}"),
+                InlineKeyboardButton("❌ Отказать", callback_data=f"reject_{order_id}")
             ],
-
             [
-                InlineKeyboardButton(
-                    "🚗 В пути",
-                    callback_data=f"progress_{order_id}"
-                ),
-
-                InlineKeyboardButton(
-                    "📍 Приехал",
-                    callback_data=f"arrived_{order_id}"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "👤 Клиент в машине",
-                    callback_data=f"picked_{order_id}"
-                ),
-
-                InlineKeyboardButton(
-                    "🏁 Завершён",
-                    callback_data=f"done_{order_id}"
-                )
+                InlineKeyboardButton("🚗 В пути", callback_data=f"progress_{order_id}"),
+                InlineKeyboardButton("🏁 Завершён", callback_data=f"done_{order_id}")
             ]
-        ]
+        ])
 
-        try:
-
-            print("ADMIN_ID =", ADMIN_ID)
-            print("TRY SEND ORDER")
-
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=order_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-
-            print("ORDER SENT SUCCESS")
-
-        except Exception as e:
-
-            print("ADMIN SEND ERROR:", e)
-
-        await update.message.reply_text(
-            "✅ Заказ отправлен диспетчеру!",
-            reply_markup=menu_keyboard
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_text,
+            reply_markup=keyboard
         )
 
+        await update.message.reply_text("✅ Заказ отправлен")
         return ConversationHandler.END
 
-# =========================
-# CANCEL
-# =========================
+async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    loc = update.message.location
+    lat = loc.latitude
+    lon = loc.longitude
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
 
-    await update.message.reply_text(
-        "❌ Заказ отменён",
-        reply_markup=menu_keyboard
-    )
-
-    return ConversationHandler.END
-
-# =========================
-# MENU
-# =========================
-
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    text = update.message.text
-    user_id = update.effective_user.id
-
-    # SUPPORT
-
-    if user_id in support_users:
-
-        try:
-
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"""
-❓ ВОПРОС ОТ КЛИЕНТА
-
-👤 USER ID: {user_id}
-
-💬 {text}
-"""
-            )
-
-        except Exception as e:
-
-            print("SUPPORT ERROR:", e)
-
-        await update.message.reply_text(
-            "✅ Сообщение отправлено оператору"
-        )
-
-        del support_users[user_id]
-
-        return
-
-    # BUTTONS
-
-    if text == "💰 Цены":
-
-        await update.message.reply_text(
-            "💰 Пример цен:\n\n"
-            "Керкраде → Амстердам — 120€\n"
-            "Керкраде → Брюссель — 140€"
-        )
-
-    elif text == "📍 Маршруты":
-
-        await update.message.reply_text(
-            "📍 Популярные маршруты:\n\n"
-            "• Керкраде → Амстердам\n"
-            "• Керкраде → Брюссель\n"
-            "• Керкраде → Аэропорт"
-        )
-
-    elif text == "❓ Помощь":
-
-        support_users[user_id] = True
-
-        await update.message.reply_text(
-            "✍️ Напишите ваш вопрос"
-        )
-
-# =========================
-# STATUS HANDLER
-# =========================
+    await update.message.reply_text(f"📍 Локация получена:\n{link}")
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
-
     await query.answer()
 
     action, order_id = query.data.split("_", 1)
 
     if order_id not in orders:
-
-        await query.message.edit_text(
-            "❌ Заказ не найден"
-        )
-
+        await query.message.edit_text("❌ Заказ не найден")
         return
 
     if action == "accept":
         orders[order_id]["status"] = "ACCEPTED"
-
     elif action == "reject":
         orders[order_id]["status"] = "REJECTED"
-
     elif action == "progress":
-        orders[order_id]["status"] = "DRIVER ON THE WAY"
-
-    elif action == "arrived":
-        orders[order_id]["status"] = "DRIVER ARRIVED"
-
-    elif action == "picked":
-        orders[order_id]["status"] = "CLIENT PICKED UP"
-
+        orders[order_id]["status"] = "IN PROGRESS"
     elif action == "done":
         orders[order_id]["status"] = "DONE"
 
-    o = orders[order_id]
-
-    new_text = f"""
+    await query.message.edit_text(
+        f"""
 🚕 ЗАКАЗ #{order_id}
 
-📍 Откуда:
-{o['from']}
+📍 Откуда: {orders[order_id]['from']}
+📍 Куда: {orders[order_id]['to']}
+📅 Когда: {orders[order_id]['date']}
 
-📍 Куда:
-{o['to']}
-
-📅 Когда:
-{o['date']}
-
-📊 Статус:
-{o['status']}
+📊 Статус: {orders[order_id]['status']}
 """
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "✅ Принять",
-                callback_data=f"accept_{order_id}"
-            ),
-
-            InlineKeyboardButton(
-                "❌ Отказать",
-                callback_data=f"reject_{order_id}"
-            )
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🚗 В пути",
-                callback_data=f"progress_{order_id}"
-            ),
-
-            InlineKeyboardButton(
-                "📍 Приехал",
-                callback_data=f"arrived_{order_id}"
-            )
-        ],
-
-        [
-            InlineKeyboardButton(
-                "👤 Клиент в машине",
-                callback_data=f"picked_{order_id}"
-            ),
-
-            InlineKeyboardButton(
-                "🏁 Завершён",
-                callback_data=f"done_{order_id}"
-            )
-        ]
-    ]
-
-    await query.message.edit_text(
-        new_text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
     try:
-
         status_map = {
-            "ACCEPTED": "✅ Ваш заказ принят",
-            "REJECTED": "❌ Ваш заказ отклонён",
-            "DRIVER ON THE WAY": "🚗 Водитель выехал",
-            "DRIVER ARRIVED": "📍 Водитель прибыл",
-            "CLIENT PICKED UP": "👤 Вы в машине",
-            "DONE": "🏁 Поездка завершена"
+            "ACCEPTED": "✅ Принят",
+            "REJECTED": "❌ Отклонён",
+            "IN PROGRESS": "🚗 В пути",
+            "DONE": "🏁 Завершён"
         }
 
         await context.bot.send_message(
-            chat_id=o["user_id"],
-            text=status_map[o["status"]]
+            chat_id=orders[order_id]["user_id"],
+            text=status_map[orders[order_id]["status"]]
         )
-
-    except Exception as e:
-
-        print("CLIENT STATUS ERROR:", e)
-
-# =========================
-# REPLY TO CLIENT
-# =========================
-
-async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    try:
-
-        user_id = int(context.args[0])
-
-        text = " ".join(context.args[1:])
-
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"📩 Ответ поддержки:\n\n{text}"
-        )
-
-        await update.message.reply_text(
-            "✅ Ответ отправлен"
-        )
-
     except:
+        pass
 
-        await update.message.reply_text(
-            "Использование:\n/reply USER_ID текст"
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "💰 Цены":
+        await update.message.reply_text("Керкраде → Амстердам 120€")
+
+    elif text == "📍 Маршруты":
+        await update.message.reply_text("Популярные маршруты:\n- Керкраде → Амстердам")
+
+    elif text == "❓ Помощь":
+        support_users[update.effective_user.id] = True
+        await update.message.reply_text("Напишите ваш вопрос")
+
+    elif update.effective_user.id in support_users:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"❓ Вопрос:\n{text}"
         )
-
-# =========================
-# MAIN
-# =========================
+        await update.message.reply_text("Отправлено оператору")
+        del support_users[update.effective_user.id]
 
 def main():
-
     app = ApplicationBuilder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-
+    conv = ConversationHandler(
         entry_points=[
-            MessageHandler(
-                filters.TEXT & filters.Regex("^🚕 Заказать трансфер$"),
-                start_order
-            )
+            MessageHandler(filters.TEXT & filters.Regex("🚕 Заказать трансфер"), start_order)
         ],
-
         states={
-
-            FROM: [
-
-                MessageHandler(
-                    filters.LOCATION,
-                    get_from
-                ),
-
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_from
-                )
-            ],
-
-            TO: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_to
-                )
-            ],
-
-            DATE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_date
-                )
-            ],
-
-            CONFIRM: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    confirm
-                )
-            ]
+            FROM: [MessageHandler(filters.TEXT, get_from)],
+            TO: [MessageHandler(filters.TEXT, get_to)],
+            DATE: [MessageHandler(filters.TEXT, get_date)],
+            CONFIRM: [MessageHandler(filters.TEXT, confirm)]
         },
-
-        fallbacks=[
-            CommandHandler("cancel", cancel)
-        ]
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
     )
 
-    app.add_handler(conv_handler)
-
+    app.add_handler(conv)
     app.add_handler(CommandHandler("start", start))
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            menu
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(status_handler)
-    )
-
-    app.add_handler(
-        CommandHandler("reply", reply)
-    )
+    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    app.add_handler(CallbackQueryHandler(status_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu))
 
     print("BOT STARTED")
-
     app.run_polling()
-
-# =========================
-# RUN
-# =========================
 
 if __name__ == "__main__":
     main()
-
