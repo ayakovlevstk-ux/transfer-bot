@@ -341,6 +341,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # STATUS HANDLER
 # =========================
 
+```python
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -359,18 +360,18 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_map = {
 
-    "accept": "✅ ПРИНЯТ",
-    "arriving": "🚗 ВОДИТЕЛЬ ВЫЕХАЛ",
-    "arrived": "📍 ВОДИТЕЛЬ НА МЕСТЕ",
-    "picked": "👤 КЛИЕНТ В МАШИНЕ",
-    "progress": "🛣 В ПУТИ",
-    "done": "🏁 ЗАВЕРШЁН",
-    "reject": "❌ ОТМЕНЁН"
+        "accept": "✅ ПРИНЯТ",
+        "arriving": "🚗 ВОДИТЕЛЬ ВЫЕХАЛ",
+        "arrived": "📍 ВОДИТЕЛЬ НА МЕСТЕ",
+        "picked": "👤 КЛИЕНТ В МАШИНЕ",
+        "progress": "🛣 В ПУТИ",
+        "done": "🏁 ЗАВЕРШЁН",
+        "reject": "❌ ОТМЕНЁН"
 
-}
+    }
 
-if action in status_map:
-    orders[order_id]["status"] = status_map[action]
+    if action in status_map:
+        orders[order_id]["status"] = status_map[action]
 
     o = orders[order_id]
 
@@ -385,6 +386,42 @@ if action in status_map:
 """
 
     await query.message.edit_text(new_text)
+
+    try:
+
+        client_status_map = {
+
+            "✅ ПРИНЯТ":
+                "✅ Ваш заказ принят",
+
+            "🚗 ВОДИТЕЛЬ ВЫЕХАЛ":
+                "🚗 Водитель выехал к вам",
+
+            "📍 ВОДИТЕЛЬ НА МЕСТЕ":
+                "📍 Водитель прибыл",
+
+            "👤 КЛИЕНТ В МАШИНЕ":
+                "👤 Поездка началась",
+
+            "🛣 В ПУТИ":
+                "🛣 Вы в пути",
+
+            "🏁 ЗАВЕРШЁН":
+                "🏁 Поездка завершена",
+
+            "❌ ОТМЕНЁН":
+                "❌ Заказ отменён"
+        }
+
+        await context.bot.send_message(
+            chat_id=o["user_id"],
+            text=client_status_map[o["status"]]
+        )
+
+    except Exception as e:
+
+        print("CLIENT STATUS ERROR:", e)
+```
 
     # CLIENT STATUS MESSAGE
 
