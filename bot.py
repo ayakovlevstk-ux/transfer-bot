@@ -1,9 +1,10 @@
 import os
+
 from telegram import (
     Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton
+    ReplyKeyboardMarkup
 )
+
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -32,14 +33,6 @@ MENU = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-LOCATION_KB = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
-        ["⬅️ Назад"]
-    ],
-    resize_keyboard=True
-)
-
 CONFIRM_KB = ReplyKeyboardMarkup(
     [
         ["✅ Подтвердить", "❌ Отмена"],
@@ -49,7 +42,7 @@ CONFIRM_KB = ReplyKeyboardMarkup(
 )
 
 # =========================
-# MEMORY (simple in-memory state)
+# MEMORY
 # =========================
 
 users = {}
@@ -73,7 +66,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # =========================
-# ROUTER (ONE HANDLER RULE)
+# ROUTER
 # =========================
 
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,100 +80,117 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "🚕 Заказать трансфер":
         user["step"] = "from"
-        await update.message.reply_text("Откуда едем?")
-        return
-
-    if text == "💰 Цены":
-        await update.message.reply_text("Керкраде → Амстердам = 120€")
-        return
-
-    if text == "📍 Маршруты":
-        await update.message.reply_text("Керкраде → Амстердам\nКеркраде → Брюссель")
-        return
-
-    if text == "❓ Помощь":
-        await update.message.reply_text("Напиши маршрут, и я помогу 🚕")
-        return
-
-    # ================= FLOW =================
-
-    if text == "⬅️ Назад":
-        user["step"] = None
-        await update.message.reply_text("Меню:", reply_markup=MENU)
-        return
-
-    # FROM
-    if step == "from":
-        user["from"] = text
-        user["step"] = "to"
-        await update.message.reply_text("Куда едем?")
-        return
-
-    # TO
-    if step == "to":
-        user["to"] = text
-        user["step"] = "location"
 
         await update.message.reply_text(
-            "Отправь геолокацию 📍",
-            reply_markup=LOCATION_KB
+            "Откуда едем?"
         )
         return
 
-    # CONFIRM TEXT
+    if text == "💰 Цены":
+        await update.message.reply_text(
+            "Керкраде → Амстердам = 120€"
+        )
+        return
+
+    if text == "📍 Маршруты":
+        await update.message.reply_text(
+            "Керкраде → Амстердам\n"
+            "Керкраде → Брюссель"
+        )
+        return
+
+    if text == "❓ Помощь":
+        await update.message.reply_text(
+            "Напиши маршрут, и я помогу 🚕"
+        )
+        return
+
+    # ================= BACK =================
+
+    if text == "⬅️ Назад":
+        user["step"] = None
+
+        await update.message.reply_text(
+            "Меню:",
+            reply_markup=MENU
+        )
+        return
+
+    # ================= FROM =================
+
+    if step == "from":
+        user["from"] = text
+        user["step"] = "to"
+
+        await update.message.reply_text(
+            "Куда едем?"
+        )
+        return
+
+    # ================= TO =================
+
+    if step == "to":
+        user["to"] = text
+        user["step"] = "confirm"
+
+        text_confirm = (
+            "🚕 Проверь заказ:\n\n"
+            f"Откуда: {user.get('from')}\n"
+            f"Куда: {user.get('to')}"
+        )
+
+        await update.message.reply_text(
+            text_confirm,
+            reply_markup=CONFIRM_KB
+        )
+        return
+
+    # ================= CONFIRM =================
+
     if step == "confirm":
+
         if text == "❌ Отмена":
             user["step"] = None
-            await update.message.reply_text("Отменено", reply_markup=MENU)
-            return
 
-        if text == "⬅️ Назад":
-            user["step"] = "location"
             await update.message.reply_text(
-                "Отправь геолокацию 📍",
-                reply_markup=LOCATION_KB
+                "Заказ отменен ❌",
+                reply_markup=MENU
             )
             return
 
         if text == "✅ Подтвердить":
-            await update.message.reply_text("Заказ принят 🚕", reply_markup=MENU)
 
-            # optional admin notify
+            order_text = (
+                "🚕 НОВЫЙ ЗАКАЗ\n\n"
+                f"👤 User ID: {user_id}\n"
+                f"📍 Откуда: {user.get('from')}\n"
+                f"🏁 Куда: {user.get('to')}"
+            )
+
+            # уведомление админу
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=order_text
+                )
+            except Exception as e:
+                print("ADMIN SEND ERROR:", e)
+
+            await update.message.reply_text(
+                "Заказ принят 🚕",
+                reply_markup=MENU
+            )
+
             print("NEW ORDER:", user)
 
             user["step"] = None
             return
 
-    # fallback
-    await update.message.reply_text("Используй меню 👇", reply_markup=MENU)
-
-# =========================
-# LOCATION
-# =========================
-
-async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user = get_user(user_id)
-
-    loc = update.message.location
-
-    user["lat"] = loc.latitude
-    user["lon"] = loc.longitude
-
-    user["step"] = "confirm"
-
-    map_link = f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}"
-
-    text = (
-        "🚕 Проверь заказ:\n\n"
-        f"Откуда: {user.get('from')}\n"
-        f"Куда: {user.get('to')}\n"
-        f"📍 Локация: {map_link}"
-    )
+    # ================= FALLBACK =================
 
     await update.message.reply_text(
-        text,
-        reply_markup=CONFIRM_KB
+        "Используй меню 👇",
+        reply_markup=MENU
     )
 
 # =========================
@@ -192,11 +202,15 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    # ONLY TWO HANDLERS (IMPORTANT)
-    app.add_handler(MessageHandler(filters.LOCATION, location_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            router
+        )
+    )
 
     print("BOT STARTED")
+
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
