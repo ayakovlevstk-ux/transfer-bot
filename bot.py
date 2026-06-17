@@ -1,5 +1,9 @@
 import os
 import asyncio
+import os
+import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telegram import (
     Update,
@@ -360,12 +364,42 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
                 "Вы можете оформить заказ заново"
             )
         )
+# =========================
+# RENDER HEALTH SERVER
+# =========================
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", "10000"))
+
+    server = ThreadingHTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    print(f"HEALTH SERVER STARTED ON PORT {port}", flush=True)
+    server.serve_forever()
+    
 # =========================
 # MAIN
 # =========================
 
 def main():
+    threading.Thread(
+        target=run_health_server,
+        daemon=True
+    ).start()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -382,9 +416,10 @@ def main():
         group=1
     )
 
-    print("BOT STARTED")
+    print("BOT STARTED", flush=True)
 
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
