@@ -131,12 +131,24 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "to":
         user["to"] = text
+        user["step"] = "date"
+
+        await update.message.reply_text(
+            "Введите дату поездки 📅\n\nНапример: 25.06.2026"
+        )
+        return
+
+    # ================= DATE =================
+
+    if step == "date":
+        user["date"] = text
         user["step"] = "confirm"
 
         text_confirm = (
             "🚕 Проверь заказ:\n\n"
-            f"Откуда: {user.get('from')}\n"
-            f"Куда: {user.get('to')}"
+            f"📍 Откуда: {user.get('from')}\n"
+            f"🏁 Куда: {user.get('to')}\n"
+            f"📅 Дата: {user.get('date')}"
         )
 
         await update.message.reply_text(
@@ -164,10 +176,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🚕 НОВЫЙ ЗАКАЗ\n\n"
                 f"👤 User ID: {user_id}\n"
                 f"📍 Откуда: {user.get('from')}\n"
-                f"🏁 Куда: {user.get('to')}"
+                f"🏁 Куда: {user.get('to')}\n"
+                f"📅 Дата: {user.get('date')}"
             )
 
-            # уведомление админу
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
