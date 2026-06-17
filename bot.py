@@ -231,100 +231,22 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Оплата не ожидается")
             return
 
-       
- keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "✅ Оплата подтверждена",
-                callback_data=f"confirm_payment_{client_id}"
+        user["status"] = "reserved"
+
+        if user.get("timer_task"):
+            user["timer_task"].cancel()
+            user["timer_task"] = None
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "✅ Оплата получена!\n\n"
+                "🚕 Ваше место ЗАКРЕПЛЕНО за вами\n"
+                "Спасибо за бронь!"
             ),
-            InlineKeyboardButton(
-                "❌ Оплаты нет",
-                callback_data=f"reject_payment_{client_id}"
-            )
-        ]
-    ])
-
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            "💳 КЛИЕНТ НАЖАЛ «Я ОПЛАТИЛ»\n\n"
-            f"👤 Клиент: {client_id}\n"
-            f"📍 Откуда: {user.get('from', '—')}\n"
-            f"🏁 Куда: {user.get('to', '—')}\n"
-            f"📅 Дата: {user.get('date', '—')}\n\n"
-            "Проверь поступление денег и нажми кнопку ниже."
-        ),
-        reply_markup=keyboard
-    )
-
-    await query.message.reply_text(
-        "⏳ Я отправил заявку администратору на проверку оплаты.\n\n"
-        "🚕 Место будет закреплено только после подтверждения администратором."
-    )
-
-    return
-
-# ADMIN CONFIRM PAYMENT
-if data.startswith("confirm_payment_"):
-    if query.from_user.id != ADMIN_ID:
-        await query.message.reply_text("❌ Нет доступа")
-        return
-
-    client_id = int(data.replace("confirm_payment_", ""))
-    user = get_user(client_id)
-
-    if user["status"] not in ["awaiting_deposit", "price_sent"]:
-        await query.message.reply_text("❌ Эта оплата уже не ожидается")
-        return
-
-    user["status"] = "reserved"
-
-    if user.get("timer_task"):
-        user["timer_task"].cancel()
-        user["timer_task"] = None
-
-    await context.bot.send_message(
-        chat_id=client_id,
-        text=(
-            "✅ Оплата подтверждена!\n\n"
-            "🚕 Ваше место ЗАКРЕПЛЕНО за вами.\n"
-            "Спасибо за бронь!"
         )
-    )
 
-    await query.message.edit_text(
-        "✅ Оплата подтверждена. Место закреплено за клиентом."
-    )
-
-    return
-
-
-# ADMIN REJECT PAYMENT
-if data.startswith("reject_payment_"):
-    if query.from_user.id != ADMIN_ID:
-        await query.message.reply_text("❌ Нет доступа")
         return
-
-    client_id = int(data.replace("reject_payment_", ""))
-    user = get_user(client_id)
-
-    user["status"] = "awaiting_deposit"
-
-    await context.bot.send_message(
-        chat_id=client_id,
-        text=(
-            "❌ Оплата пока не подтверждена.\n\n"
-            "Проверьте платёж или свяжитесь с администратором.\n"
-            "🚕 Место пока НЕ закреплено."
-        )
-    )
-
-    await query.message.edit_text(
-        "❌ Оплата отклонена. Клиенту отправлено уведомление."
-    )
-
-    return
 
     # ADMIN ACCEPT
     if data.startswith("accept_"):
