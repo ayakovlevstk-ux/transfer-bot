@@ -204,7 +204,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         maps_link = (
-            f"https://maps.google.com/?q="
+            f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             f"{orders[order_id]['from']}"
         )
 
