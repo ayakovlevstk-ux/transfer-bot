@@ -1,11 +1,13 @@
+```python
 import os
 import time
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
+    KeyboardButton,
     InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    KeyboardButton
+    InlineKeyboardButton
 )
 
 from telegram.ext import (
@@ -24,6 +26,7 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 
+# ВСТАВЬ СВОЙ TELEGRAM ID
 ADMIN_ID = 8308540295
 
 if not TOKEN:
@@ -33,7 +36,7 @@ if not TOKEN:
 # STATES
 # =========================
 
-FROM, TO, DATE, CONFIRM, REVIEW = range(5)
+FROM, TO, DATE, CONFIRM = range(4)
 
 # =========================
 # STORAGE
@@ -86,7 +89,8 @@ async def start_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        "📍 Отправьте геолокацию или напишите адрес",
+        "📍 Откуда вас забрать?\n\n"
+        "Можно отправить текст или геолокацию",
         reply_markup=location_keyboard
     )
 
@@ -103,7 +107,7 @@ async def get_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lat = update.message.location.latitude
         lon = update.message.location.longitude
 
-        context.user_data["from"] = f"{lat},{lon}"
+        context.user_data["from"] = f"{lat}, {lon}"
 
     else:
 
@@ -140,9 +144,14 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = f"""
 🚕 ПРОВЕРЬТЕ ЗАКАЗ
 
-📍 Откуда: {context.user_data['from']}
-📍 Куда: {context.user_data['to']}
-📅 Когда: {context.user_data['date']}
+📍 Откуда:
+{context.user_data['from']}
+
+📍 Куда:
+{context.user_data['to']}
+
+📅 Когда:
+{context.user_data['date']}
 
 Подтвердить заказ?
 """
@@ -171,6 +180,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user = update.effective_user
 
+    # CANCEL
     if text == "❌ Отмена":
 
         await update.message.reply_text(
@@ -180,6 +190,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return ConversationHandler.END
 
+    # CONFIRM
     if text == "✅ Подтвердить":
 
         order_id = str(int(time.time()))
@@ -192,10 +203,10 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "user_id": user.id
         }
 
-        from_address = str(orders[order_id]["from"]).replace(" ", "+")
-        to_address = str(orders[order_id]["to"]).replace(" ", "+")
-
-        maps_url = f"https://www.google.com/maps/dir/{from_address}/{to_address}"
+        maps_link = (
+            f"https://maps.google.com/?q="
+            f"{orders[order_id]['from']}"
+        )
 
         order_text = f"""
 🚕 НОВЫЙ ЗАКАЗ #{order_id}
@@ -203,12 +214,17 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👤 Клиент: @{user.username}
 🆔 ID: {user.id}
 
-📍 Откуда: {orders[order_id]['from']}
-📍 Куда: {orders[order_id]['to']}
-📅 Когда: {orders[order_id]['date']}
+📍 Откуда:
+{orders[order_id]['from']}
 
-🗺 Маршрут:
-{maps_url}
+🗺 Google Maps:
+{maps_link}
+
+📍 Куда:
+{orders[order_id]['to']}
+
+📅 Когда:
+{orders[order_id]['date']}
 
 📊 Статус: NEW
 """
@@ -228,17 +244,22 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             [
                 InlineKeyboardButton(
-                    "🚗 Выехал",
+                    "🚗 В пути",
                     callback_data=f"progress_{order_id}"
                 ),
 
                 InlineKeyboardButton(
-                    "👤 Клиент в машине",
-                    callback_data=f"pickup_{order_id}"
+                    "📍 Приехал",
+                    callback_data=f"arrived_{order_id}"
                 )
             ],
 
             [
+                InlineKeyboardButton(
+                    "👤 Клиент в машине",
+                    callback_data=f"picked_{order_id}"
+                ),
+
                 InlineKeyboardButton(
                     "🏁 Завершён",
                     callback_data=f"done_{order_id}"
@@ -248,11 +269,16 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
 
+            print("ADMIN_ID =", ADMIN_ID)
+            print("TRY SEND ORDER")
+
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=order_text,
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+
+            print("ORDER SENT SUCCESS")
 
         except Exception as e:
 
@@ -372,7 +398,10 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "progress":
         orders[order_id]["status"] = "DRIVER ON THE WAY"
 
-    elif action == "pickup":
+    elif action == "arrived":
+        orders[order_id]["status"] = "DRIVER ARRIVED"
+
+    elif action == "picked":
         orders[order_id]["status"] = "CLIENT PICKED UP"
 
     elif action == "done":
@@ -383,11 +412,17 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_text = f"""
 🚕 ЗАКАЗ #{order_id}
 
-📍 Откуда: {o['from']}
-📍 Куда: {o['to']}
-📅 Когда: {o['date']}
+📍 Откуда:
+{o['from']}
 
-📊 Статус: {o['status']}
+📍 Куда:
+{o['to']}
+
+📅 Когда:
+{o['date']}
+
+📊 Статус:
+{o['status']}
 """
 
     keyboard = [
@@ -405,17 +440,22 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         [
             InlineKeyboardButton(
-                "🚗 Выехал",
+                "🚗 В пути",
                 callback_data=f"progress_{order_id}"
             ),
 
             InlineKeyboardButton(
-                "👤 Клиент в машине",
-                callback_data=f"pickup_{order_id}"
+                "📍 Приехал",
+                callback_data=f"arrived_{order_id}"
             )
         ],
 
         [
+            InlineKeyboardButton(
+                "👤 Клиент в машине",
+                callback_data=f"picked_{order_id}"
+            ),
+
             InlineKeyboardButton(
                 "🏁 Завершён",
                 callback_data=f"done_{order_id}"
@@ -434,8 +474,9 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ACCEPTED": "✅ Ваш заказ принят",
             "REJECTED": "❌ Ваш заказ отклонён",
             "DRIVER ON THE WAY": "🚗 Водитель выехал",
-            "CLIENT PICKED UP": "👤 Вы уже в машине",
-            "DONE": "🏁 Поездка завершена\n\n⭐ Оцените поездку от 1 до 5"
+            "DRIVER ARRIVED": "📍 Водитель прибыл",
+            "CLIENT PICKED UP": "👤 Вы в машине",
+            "DONE": "🏁 Поездка завершена"
         }
 
         await context.bot.send_message(
@@ -443,59 +484,12 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=status_map[o["status"]]
         )
 
-        if o["status"] == "DONE":
-
-            review_keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("⭐", callback_data=f"review_1"),
-                        InlineKeyboardButton("⭐⭐", callback_data=f"review_2"),
-                        InlineKeyboardButton("⭐⭐⭐", callback_data=f"review_3"),
-                        InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"review_4"),
-                        InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"review_5")
-                    ]
-                ]
-            )
-
-            await context.bot.send_message(
-                chat_id=o["user_id"],
-                text="⭐ Оцените поездку",
-                reply_markup=review_keyboard
-            )
-
     except Exception as e:
 
         print("CLIENT STATUS ERROR:", e)
 
 # =========================
-# REVIEW HANDLER
-# =========================
-
-async def review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    rating = query.data.split("_")[1]
-
-    await query.edit_message_text(
-        f"🙏 Спасибо за оценку: {rating}⭐"
-    )
-
-    try:
-
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"⭐ Новый отзыв: {rating}/5"
-        )
-
-    except Exception as e:
-
-        print("REVIEW ERROR:", e)
-
-# =========================
-# REPLY
+# REPLY TO CLIENT
 # =========================
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -544,8 +538,14 @@ def main():
         states={
 
             FROM: [
+
                 MessageHandler(
-                    (filters.TEXT | filters.LOCATION) & ~filters.COMMAND,
+                    filters.LOCATION,
+                    get_from
+                ),
+
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
                     get_from
                 )
             ],
@@ -589,13 +589,6 @@ def main():
     )
 
     app.add_handler(
-        CallbackQueryHandler(
-            review_handler,
-            pattern="^review_"
-        )
-    )
-
-    app.add_handler(
         CallbackQueryHandler(status_handler)
     )
 
@@ -613,3 +606,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
