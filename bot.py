@@ -162,49 +162,49 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ================= CONFIRM =================
 
-if step == "confirm":
+    if step == "confirm":
 
-    if text == "❌ Отмена":
-        user["step"] = None
+        if text == "❌ Отмена":
+            user["step"] = None
 
-        await update.message.reply_text(
-            "Заказ отменен ❌",
-            reply_markup=MENU
-        )
-        return
+            await update.message.reply_text(
+                "Заказ отменен ❌",
+                reply_markup=MENU
+            )
+            return
 
-    if text == "✅ Подтвердить":
+        if text == "✅ Подтвердить":
 
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "✅ Подтвердить рейс",
-                    callback_data=f"accept_{user_id}"
-                )
-            ]
-        ])
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить рейс",
+                        callback_data=f"accept_{user_id}"
+                    )
+                ]
+            ])
 
-        order_text = (
-            "🚕 НОВАЯ ЗАЯВКА\n\n"
-            f"👤 Клиент: {user_id}\n"
-            f"📍 Откуда: {user.get('from')}\n"
-            f"🏁 Куда: {user.get('to')}\n"
-            f"📅 Дата: {user.get('date')}"
-        )
+            order_text = (
+                "🚕 НОВАЯ ЗАЯВКА\n\n"
+                f"👤 Клиент: {user_id}\n"
+                f"📍 Откуда: {user.get('from')}\n"
+                f"🏁 Куда: {user.get('to')}\n"
+                f"📅 Дата: {user.get('date')}"
+            )
 
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=order_text,
-            reply_markup=keyboard
-        )
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=order_text,
+                reply_markup=keyboard
+            )
 
-        await update.message.reply_text(
-            "⏳ Заявка отправлена.\nОжидайте подтверждения рейса.",
-            reply_markup=MENU
-        )
+            await update.message.reply_text(
+                "⏳ Заявка отправлена.\nОжидайте подтверждения рейса.",
+                reply_markup=MENU
+            )
 
-        user["step"] = None
-        return
+            user["step"] = None
+            return
 
     # ================= FALLBACK =================
 
