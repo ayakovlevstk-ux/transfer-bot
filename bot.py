@@ -14,6 +14,7 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     ContextTypes,
+    ApplicationHandlerStop,
     filters
 )
 
@@ -204,73 +205,82 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Используй меню 👇", reply_markup=MENU)
 
 # =========================
-# CLIENT PAID → RESERVE SEAT
+# CALLBACKS
 # =========================
 
-if data == "paid":
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
 
-    client_id = query.from_user.id
-    user = get_user(client_id)
+    await query.answer()
 
-    if user["status"] not in ["awaiting_deposit", "price_sent"]:
-        await query.message.reply_text("❌ Оплата не ожидается")
+    # CLIENT PAID → RESERVE SEAT
+    if data == "paid":
+        client_id = query.from_user.id
+        user = get_user(client_id)
+
+        if user["status"] not in ["awaiting_deposit", "price_sent"]:
+            await query.message.reply_text("❌ Оплата не ожидается")
+            return
+
+        user["status"] = "reserved"
+
+        if user.get("timer_task"):
+            user["timer_task"].cancel()
+            user["timer_task"] = None
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "✅ Оплата получена!\n\n"
+                "🚕 Ваше место ЗАКРЕПЛЕНО за вами\n"
+                "Спасибо за бронь!"
+            )
+        )
+
         return
 
-    user["status"] = "reserved"
+    # ADMIN ACCEPT
+    if data.startswith("accept_"):
+        client_id = int(data.split("_")[1])
+        user = get_user(client_id)
 
-    if user.get("timer_task"):
-        user["timer_task"].cancel()
-        user["timer_task"] = None
+        user["status"] = "awaiting_deposit"
+        context.user_data["price_for"] = client_id
 
-    await context.bot.send_message(
-        chat_id=client_id,
-        text=(
-            "✅ Оплата получена!\n\n"
-            "🚕 Ваше место ЗАКРЕПЛЕНО за вами\n"
-            "Спасибо за бронь!"
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "🚕 Рейс подтверждён!\n\n"
+                "💳 Для бронирования места необходимо оплатить 50%\n"
+                "⚠️ Без оплаты место НЕ закреплено"
+            )
         )
-    )
 
-    return
-
-
-# ================= ACCEPT =================
-if data.startswith("accept_"):
-
-    client_id = int(data.split("_")[1])
-    user = get_user(client_id)
-
-    user["status"] = "awaiting_deposit"
-    context.user_data["price_for"] = client_id
-
-    await context.bot.send_message(
-        chat_id=client_id,
-        text=(
-            "🚕 Рейс подтверждён!\n\n"
-            "💳 Для бронирования места необходимо оплатить 50%\n"
-            "⚠️ Без оплаты место НЕ закреплено"
+        await query.message.reply_text(
+            "Введите полную стоимость поездки числом. Например: 120"
         )
-    )
 
-    await query.message.reply_text("Ожидание цены (50% предоплата)")
-    return
+        return
 
+    # ADMIN REJECT
+    if data.startswith("reject_"):
+        client_id = int(data.split("_")[1])
+        user = get_user(client_id)
 
-# ================= REJECT =================
-if data.startswith("reject_"):
+        user["status"] = "rejected"
 
-    client_id = int(data.split("_")[1])
-    user = get_user(client_id)
+        if user.get("timer_task"):
+            user["timer_task"].cancel()
+            user["timer_task"] = None
 
-    user["status"] = "rejected"
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="❌ Ваш заказ был отклонён"
+        )
 
-    await context.bot.send_message(
-        chat_id=client_id,
-        text="❌ Ваш заказ был отклонён"
-    )
-
-    await query.message.reply_text("Заявка отклонена ❌")
-    return
+        await query.message.reply_text("Заявка отклонена ❌")
+        return
 
 # =========================
 # ADMIN PRICE
@@ -284,10 +294,16 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "price_for" not in context.user_data:
         return
 
-    client_id = context.user_data["price_for"]
-    price = float(update.message.text)
+    try:
+        price = float(update.message.text.replace(",", "."))
+    except ValueError:
+        await update.message.reply_text(
+            "Введите цену числом. Например: 120 или 120.50"
+        )
+        raise ApplicationHandlerStop
 
-    deposit = price * 0.5
+    client_id = context.user_data["price_for"]
+    deposit = round(price * 0.5, 2)
 
     user = get_user(client_id)
     user["status"] = "awaiting_deposit"
@@ -295,19 +311,38 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_link = PAYMENT_BASE_URL + str(client_id) + f"&amount={deposit}"
 
     await context.bot.send_message(
-    chat_id=client_id,
-    text=(
-        "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
-        f"💰 Общая цена: {price}€\n"
-        f"💵 Предоплата 50%: {deposit}€\n\n"
-        f"🔗 Оплатить: {payment_link}\n\n"
-        "⚠️ После оплаты место будет закреплено"
-    ),
-    reply_markup=PAYMENT_KB
-)
-    
+        chat_id=client_id,
+        text=(
+            "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
+            f"💰 Общая цена: {price}€\n"
+            f"💵 Предоплата 50%: {deposit}€\n\n"
+            f"🔗 Оплатить: {payment_link}\n\n"
+            "⚠️ После оплаты место будет закреплено"
+        ),
+        reply_markup=PAYMENT_KB
+    )
+
+    if user.get("timer_task"):
+        user["timer_task"].cancel()
+
+    user["timer_task"] = asyncio.create_task(
+        deposit_timer(client_id, context)
+    )
+
+    context.user_data.pop("price_for", None)
+
+    await update.message.reply_text(
+        f"✅ Цена отправлена клиенту. Предоплата: {deposit}€"
+    )
+
+    raise ApplicationHandlerStop
+
+# =========================
+# DEPOSIT TIMER
+# =========================
+
 async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(3600)  # 1 час (можешь поставить 600 для теста)
+    await asyncio.sleep(3600)  # 1 час, для теста можно поставить 600
 
     user = get_user(client_id)
 
@@ -315,6 +350,7 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
     if user["status"] == "awaiting_deposit":
 
         user["status"] = None
+        user["timer_task"] = None
 
         await context.bot.send_message(
             chat_id=client_id,
@@ -323,7 +359,7 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Ваша бронь снята\n"
                 "Вы можете оформить заказ заново"
             )
-        )    
+        )
 
 # =========================
 # MAIN
