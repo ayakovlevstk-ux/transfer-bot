@@ -188,8 +188,23 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💰 Цены":
         await update.message.reply_text(
-            "Батуми (Аэропорт) → Батуми - 100 GEL\n"
-            "Батуми → Тбилиси — цена по запросу"
+            "💰 Цены за 1 место:\n\n"
+            "Батуми ↔ Сарпи — 35 GEL\n"
+            "Батуми ↔ Кобулети — 50 GEL\n"
+            "Батуми ↔ Уреки — 70 GEL\n"
+            "Батуми ↔ Кутаиси — 140 GEL\n"
+            "Батуми ↔ Боржоми — 210 GEL\n"
+            "Батуми ↔ Бакуриани — 240 GEL\n"
+            "Батуми ↔ Гудаури — 300 GEL\n"
+            "Батуми ↔ Казбеги — 320 GEL\n"
+            "Батуми ↔ Сигнахи — 330 GEL\n"
+            "Батуми ↔ Владикавказ — 350 GEL\n"
+            "Батуми ↔ Ереван — 420 GEL\n"
+            "Батуми ↔ Баку — по запросу\n\n"
+            "🎁 При заказе от 4 мест — скидка 5%.\n"
+            "Цена указана за 1 пассажирское место.\n"
+            "Обратное направление считается по тому же тарифу.\n"
+            "Финальная цена зависит от даты, багажа, ожидания и пограничных условий."
         )
         return
 
@@ -201,13 +216,64 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "❓ Помощь":
-        await update.message.reply_text("Напиши маршрут, и я помогу 🚕")
+        user["step"] = "support_question"
+        user["client_name"] = get_client_name(update.message.from_user)
+        user["client_url"] = get_client_url(update.message.from_user)
+
+        await update.message.reply_text(
+            "Напишите ваш вопрос одним сообщением.\n"
+            "Я передам его менеджеру 🚕\n\n"
+            "Чтобы вернуться в меню, нажмите «⬅️ Назад».",
+            reply_markup=CONFIRM_KB,
+        )
         return
 
     if text == "⬅️ Назад":
         user["step"] = None
         await update.message.reply_text("Меню:", reply_markup=MENU)
         return
+
+    # SUPPORT QUESTION
+    if step == "support_question":
+        question_text = text.strip()
+
+        if not question_text:
+            await update.message.reply_text(
+                "Напишите вопрос текстом или нажмите «⬅️ Назад»."
+            )
+            return
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "👤 Открыть клиента",
+                        url=user.get("client_url", f"tg://user?id={user_id}"),
+                    )
+                ]
+            ]
+        )
+
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                "❓ ВОПРОС ОТ КЛИЕНТА\n\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {user_id}\n\n"
+                f"💬 Вопрос:\n{question_text}"
+            ),
+            reply_markup=keyboard,
+        )
+
+        user["step"] = None
+
+        await update.message.reply_text(
+            "✅ Вопрос отправлен менеджеру.\n"
+            "Мы ответим вам в ближайшее время.",
+            reply_markup=MENU,
+        )
+        return
+
 
     # SEATS
     if step == "seats":
@@ -646,7 +712,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - SHORT ORDER ID VERSION", flush=True)
+    print("BOT STARTED - HELP QUESTION VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
