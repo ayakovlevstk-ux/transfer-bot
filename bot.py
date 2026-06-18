@@ -477,7 +477,7 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=(
             "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
             f"💰 Общая цена:\n{format_multicurrency(price)}\n\n"
-            f"f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
+            f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
             f"🔗 Оплатить: {payment_link}\n\n"
             "⚠️ После оплаты место будет закреплено"
         ),
