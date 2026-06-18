@@ -29,6 +29,32 @@ ADMIN_IDS = {8308540295}
 ADMIN_CHAT_ID = -1003903294475
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
+BASE_CURRENCY = "GEL"
+
+EXCHANGE_RATES = {
+    "GEL": 1,
+    "USD": 0.37,
+    "EUR": 0.32,
+    "RUB": 27.4,
+}
+
+
+def convert_price(amount_gel: float, currency: str) -> float:
+    rate = EXCHANGE_RATES.get(currency, 1)
+    return round(amount_gel * rate, 2)
+
+
+def format_multicurrency(amount_gel: float) -> str:
+    usd = convert_price(amount_gel, "USD")
+    eur = convert_price(amount_gel, "EUR")
+    rub = convert_price(amount_gel, "RUB")
+
+    return (
+        f"{amount_gel:.0f} GEL\n"
+        f"≈ {usd:.0f} USD\n"
+        f"≈ {eur:.0f} EUR\n"
+        f"≈ {rub:.0f} RUB"
+    )
 
 # =========================
 # KEYBOARDS
@@ -390,7 +416,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await query.message.reply_text(
-            "Введите полную стоимость поездки числом. Например: 120"
+            "Введите полную стоимость поездки в GEL. Например: 100"
         )
 
         return
@@ -450,8 +476,8 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=client_id,
         text=(
             "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
-            f"💰 Общая цена: {price}€\n"
-            f"💵 Предоплата 50%: {deposit}€\n\n"
+            f"💰 Общая цена:\n{format_multicurrency(price)}\n\n"
+            f"f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
             f"🔗 Оплатить: {payment_link}\n\n"
             "⚠️ После оплаты место будет закреплено"
         ),
@@ -468,8 +494,9 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("price_for", None)
 
     await update.message.reply_text(
-        f"✅ Цена отправлена клиенту. Предоплата: {deposit}€"
-    )
+    f"✅ Цена отправлена клиенту.\n\n"
+    f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}"
+)
 
     raise ApplicationHandlerStop
 
