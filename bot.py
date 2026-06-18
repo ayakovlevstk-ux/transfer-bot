@@ -349,6 +349,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎁 При заказе от 4 мест — скидка 5%.\n"
             "Цена указана за 1 пассажирское место.\n"
             "Обратное направление считается по тому же тарифу.\n"
+            "Если нужного направления нет в списке, выберите «Другое направление» при заказе.\n"
             "Финальная цена зависит от даты, багажа, ожидания и пограничных условий."
         )
         return
@@ -503,6 +504,19 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == "route":
         route = text.strip()
 
+        if route == "Другое направление":
+            user["step"] = "custom_route"
+            await update.message.reply_text(
+                "Напишите свой маршрут одним сообщением.\n\n"
+                "Например:\n"
+                "Батуми → Трабзон\n"
+                "Кобулети → Владикавказ\n"
+                "Аэропорт Кутаиси → Батуми\n\n"
+                "Цена по нестандартному маршруту будет рассчитана менеджером.",
+                reply_markup=CONFIRM_KB,
+            )
+            return
+
         if route not in ROUTE_PRICES_GEL and route not in REQUEST_PRICE_ROUTES:
             await update.message.reply_text(
                 "Выберите направление кнопкой ниже или нажмите «Другое направление».",
@@ -520,6 +534,32 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{price_summary(price_data)}\n\n"
             "Теперь уточните, откуда именно забрать пассажиров.\n"
             "Например: Батуми, аэропорт / адрес / отель.",
+            reply_markup=CONFIRM_KB,
+        )
+
+        user["step"] = "from"
+        return
+
+    # CUSTOM ROUTE
+    if step == "custom_route":
+        custom_route = text.strip()
+
+        if len(custom_route) < 3:
+            await update.message.reply_text(
+                "Напишите маршрут подробнее. Например: Батуми → Трабзон."
+            )
+            return
+
+        user["route"] = custom_route
+        price_data = calculate_order_price(custom_route, int(user.get("seats", 1)))
+        user["price_data"] = price_data
+        user["total_price_gel"] = None
+
+        await update.message.reply_text(
+            f"Направление: {custom_route}\n"
+            f"{price_summary(price_data)}\n\n"
+            "Теперь уточните, откуда именно забрать пассажиров.\n"
+            "Например: адрес, отель, аэропорт или точка встречи.",
             reply_markup=CONFIRM_KB,
         )
 
@@ -976,7 +1016,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - AUTO PRICE VERSION", flush=True)
+    print("BOT STARTED - CUSTOM ROUTE VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
