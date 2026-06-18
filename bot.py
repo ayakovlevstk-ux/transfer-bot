@@ -404,10 +404,16 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 [
                     InlineKeyboardButton(
+                        "✉️ Ответить клиенту",
+                        callback_data=f"reply_{user_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         "👤 Открыть клиента",
                         url=user.get("client_url", f"tg://user?id={user_id}"),
                     )
-                ]
+                ],
             ]
         )
 
@@ -446,10 +452,16 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 [
                     InlineKeyboardButton(
+                        "✉️ Ответить клиенту",
+                        callback_data=f"reply_{user_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         "👤 Открыть клиента",
                         url=user.get("client_url", f"tg://user?id={user_id}"),
                     )
-                ]
+                ],
             ]
         )
 
@@ -701,6 +713,25 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
+    # ADMIN START REPLY TO CLIENT
+    if data.startswith("reply_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("reply_", ""))
+        user = get_user(client_id)
+
+        context.user_data["reply_to_client"] = client_id
+
+        await query.message.reply_text(
+            "✉️ Напишите ответ клиенту следующим сообщением.\n\n"
+            f"Клиент: {user.get('client_name', 'Клиент')}\n"
+            f"Telegram ID: {client_id}\n\n"
+            "Чтобы отменить ответ, напишите: отмена"
+        )
+        return
+
     # CLIENT PAID → SEND PAYMENT CHECK TO ADMIN
     if data == "paid":
         client_id = query.from_user.id
@@ -903,6 +934,37 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id not in ADMIN_IDS:
         return
 
+    if "reply_to_client" in context.user_data:
+        client_id = context.user_data["reply_to_client"]
+        answer_text = update.message.text.strip()
+
+        if answer_text.lower() in ["отмена", "cancel", "❌ отмена"]:
+            context.user_data.pop("reply_to_client", None)
+            await update.message.reply_text("Ответ клиенту отменён.")
+            raise ApplicationHandlerStop
+
+        try:
+            await context.bot.send_message(
+                chat_id=client_id,
+                text=(
+                    "💬 Ответ менеджера:\n\n"
+                    f"{answer_text}"
+                ),
+            )
+
+            context.user_data.pop("reply_to_client", None)
+
+            await update.message.reply_text(
+                "✅ Ответ отправлен клиенту."
+            )
+
+        except Exception as exc:
+            await update.message.reply_text(
+                f"❌ Не удалось отправить ответ клиенту: {exc}"
+            )
+
+        raise ApplicationHandlerStop
+
     if "price_for" not in context.user_data:
         return
 
@@ -1016,7 +1078,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - CUSTOM ROUTE VERSION", flush=True)
+    print("BOT STARTED - ADMIN REPLY VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
