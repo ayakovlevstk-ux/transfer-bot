@@ -106,8 +106,11 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # MENU
     if text == "🚕 Заказать трансфер":
-        user["step"] = "from"
-        await update.message.reply_text("Откуда едем?")
+        user["step"] = "seats"
+        await update.message.reply_text(
+            "Сколько мест необходимо?\n\n"
+            "Введите число от 1 до 7."
+        )
         return
 
     if text == "💰 Цены":
@@ -127,6 +130,28 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "⬅️ Назад":
         user["step"] = None
         await update.message.reply_text("Меню:", reply_markup=MENU)
+        return
+
+    # SEATS
+    if step == "seats":
+        try:
+            seats = int(text.strip())
+        except ValueError:
+            await update.message.reply_text(
+                "Введите количество мест числом. Например: 2"
+            )
+            return
+
+        if seats < 1 or seats > 7:
+            await update.message.reply_text(
+                "Для Toyota Sienna можно указать от 1 до 7 мест.\n"
+                "Введите корректное количество."
+            )
+            return
+
+        user["seats"] = seats
+        user["step"] = "from"
+        await update.message.reply_text("Откуда едем?")
         return
 
     # FROM
@@ -150,6 +175,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"🚕 Проверь заказ:\n\n"
+            f"👥 Мест: {user.get('seats', '—')}\n"
             f"📍 Откуда: {user['from']}\n"
             f"🏁 Куда: {user['to']}\n"
             f"📅 Дата: {user['date']}",
@@ -190,6 +216,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_text = (
                 "🚕 НОВАЯ ЗАЯВКА\n\n"
                 f"👤 Клиент: {user_id}\n"
+                f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user['from']}\n"
                 f"🏁 Куда: {user['to']}\n"
                 f"📅 Дата: {user['date']}\n"
@@ -261,6 +288,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=(
                 "💳 КЛИЕНТ НАЖАЛ «Я ОПЛАТИЛ»\n\n"
                 f"👤 Клиент: {client_id}\n"
+                f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user.get('from', '—')}\n"
                 f"🏁 Куда: {user.get('to', '—')}\n"
                 f"📅 Дата: {user.get('date', '—')}\n\n"
@@ -523,7 +551,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - ADMIN PAYMENT CHECK VERSION", flush=True)
+    print("BOT STARTED - SEATS FLOW VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
