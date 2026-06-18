@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+import secrets
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -45,10 +46,18 @@ EXCHANGE_RATES = {
 # HELPERS
 # =========================
 
-def generate_order_id(user_id: int) -> str:
-    now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    user_tail = str(user_id)[-4:]
-    return f"BT-{now}-{user_tail}"
+def generate_order_id() -> str:
+    for _ in range(30):
+        order_id = str(secrets.randbelow(900000) + 100000)
+
+        if order_id not in used_order_ids:
+            used_order_ids.add(order_id)
+            return order_id
+
+    # Fallback, если вдруг случайно 30 раз подряд попали в уже существующий номер.
+    order_id = datetime.now().strftime("%H%M%S")
+    used_order_ids.add(order_id)
+    return order_id
 
 
 def get_client_name(tg_user) -> str:
@@ -129,6 +138,7 @@ PAYMENT_KB = InlineKeyboardMarkup(
 # =========================
 
 users = {}
+used_order_ids = set()
 
 
 def get_user(user_id: int):
@@ -169,7 +179,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # MENU
     if text == "🚕 Заказать трансфер":
         user["step"] = "seats"
-        user["order_id"] = generate_order_id(user_id)
+        user["order_id"] = generate_order_id()
         user["client_name"] = get_client_name(update.message.from_user)
         user["client_url"] = get_client_url(update.message.from_user)
 
@@ -636,7 +646,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - SEATS ORDER ID VERSION", flush=True)
+    print("BOT STARTED - SHORT ORDER ID VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
