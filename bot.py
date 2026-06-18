@@ -107,7 +107,7 @@ def format_multicurrency(amount_gel: float) -> str:
 MENU = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
-        ["💰 Цены", "📍 Маршруты"],
+        ["💰 Цены", "📦 Посылка"],
         ["❓ Помощь"],
     ],
     resize_keyboard=True,
@@ -218,10 +218,21 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == "📍 Маршруты":
+    if text == "📦 Посылка":
+        user["step"] = "parcel_request"
+        user["client_name"] = get_client_name(update.message.from_user)
+        user["client_url"] = get_client_url(update.message.from_user)
+
         await update.message.reply_text(
-            "Батуми (Аэропорт) → Батуми\n"
-            "Батуми → Тбилиси"
+            "📦 Опишите посылку одним сообщением.\n\n"
+            "Напишите:\n"
+            "• откуда забрать;\n"
+            "• куда доставить;\n"
+            "• что за посылка;\n"
+            "• примерный размер и вес;\n"
+            "• когда нужно передать.\n\n"
+            "Я передам заявку менеджеру.",
+            reply_markup=CONFIRM_KB,
         )
         return
 
@@ -242,6 +253,48 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["step"] = None
         await update.message.reply_text("Меню:", reply_markup=MENU)
         return
+
+    # PARCEL REQUEST
+    if step == "parcel_request":
+        parcel_text = text.strip()
+
+        if not parcel_text:
+            await update.message.reply_text(
+                "Опишите посылку текстом или нажмите «⬅️ Назад»."
+            )
+            return
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "👤 Открыть клиента",
+                        url=user.get("client_url", f"tg://user?id={user_id}"),
+                    )
+                ]
+            ]
+        )
+
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                "📦 ЗАЯВКА НА ПОСЫЛКУ\n\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {user_id}\n\n"
+                f"📦 Описание:\n{parcel_text}"
+            ),
+            reply_markup=keyboard,
+        )
+
+        user["step"] = None
+
+        await update.message.reply_text(
+            "✅ Заявка по посылке отправлена менеджеру.\n"
+            "Мы ответим вам в ближайшее время.",
+            reply_markup=MENU,
+        )
+        return
+
 
     # SUPPORT QUESTION
     if step == "support_question":
@@ -746,7 +799,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - ORDER COMMENT VERSION", flush=True)
+    print("BOT STARTED - PARCEL BUTTON VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
