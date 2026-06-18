@@ -400,8 +400,21 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        user["parcel_text"] = parcel_text
+        user["parcel_status"] = "waiting"
+
         keyboard = InlineKeyboardMarkup(
             [
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить посылку",
+                        callback_data=f"parcel_accept_{user_id}",
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отклонить посылку",
+                        callback_data=f"parcel_reject_{user_id}",
+                    ),
+                ],
                 [
                     InlineKeyboardButton(
                         "✉️ Ответить клиенту",
@@ -422,7 +435,8 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=(
                 "📦 ЗАЯВКА НА ПОСЫЛКУ\n\n"
                 f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
-                f"🆔 Telegram ID: {user_id}\n\n"
+                f"🆔 Telegram ID: {user_id}\n"
+                f"📊 Статус: waiting\n\n"
                 f"📦 Описание:\n{parcel_text}"
             ),
             reply_markup=keyboard,
@@ -730,6 +744,98 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Telegram ID: {client_id}\n\n"
             "Чтобы отменить ответ, напишите: отмена"
         )
+        return
+
+    # ADMIN ACCEPT PARCEL REQUEST
+    if data.startswith("parcel_accept_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("parcel_accept_", ""))
+        user = get_user(client_id)
+        user["parcel_status"] = "accepted"
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "✅ Заявка на посылку подтверждена!\n\n"
+                "Менеджер свяжется с вами и уточнит детали доставки."
+            ),
+        )
+
+        await query.message.edit_text(
+            text=(
+                "✅ ЗАЯВКА НА ПОСЫЛКУ ПОДТВЕРЖДЕНА\n\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {client_id}\n"
+                f"📊 Статус: accepted\n\n"
+                f"📦 Описание:\n{user.get('parcel_text', '—')}"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✉️ Ответить клиенту",
+                            callback_data=f"reply_{client_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "👤 Открыть клиента",
+                            url=user.get("client_url", f"tg://user?id={client_id}"),
+                        )
+                    ],
+                ]
+            ),
+        )
+
+        return
+
+    # ADMIN REJECT PARCEL REQUEST
+    if data.startswith("parcel_reject_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("parcel_reject_", ""))
+        user = get_user(client_id)
+        user["parcel_status"] = "rejected"
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "❌ К сожалению, сейчас мы не можем взять эту посылку.\n\n"
+                "Вы можете написать менеджеру, если хотите уточнить детали."
+            ),
+        )
+
+        await query.message.edit_text(
+            text=(
+                "❌ ЗАЯВКА НА ПОСЫЛКУ ОТКЛОНЕНА\n\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {client_id}\n"
+                f"📊 Статус: rejected\n\n"
+                f"📦 Описание:\n{user.get('parcel_text', '—')}"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✉️ Ответить клиенту",
+                            callback_data=f"reply_{client_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "👤 Открыть клиента",
+                            url=user.get("client_url", f"tg://user?id={client_id}"),
+                        )
+                    ],
+                ]
+            ),
+        )
+
         return
 
     # CLIENT PAID → SEND PAYMENT CHECK TO ADMIN
@@ -1078,7 +1184,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - ADMIN REPLY VERSION", flush=True)
+    print("BOT STARTED - PARCEL CONFIRM VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
