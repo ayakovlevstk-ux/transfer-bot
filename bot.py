@@ -121,6 +121,14 @@ CONFIRM_KB = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+COMMENT_KB = ReplyKeyboardMarkup(
+    [
+        ["Без комментария"],
+        ["⬅️ Назад"],
+    ],
+    resize_keyboard=True,
+)
+
 PAYMENT_KB = InlineKeyboardMarkup(
     [
         [
@@ -179,9 +187,11 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # MENU
     if text == "🚕 Заказать трансфер":
         user["step"] = "seats"
+        user["status"] = None
         user["order_id"] = generate_order_id()
         user["client_name"] = get_client_name(update.message.from_user)
         user["client_url"] = get_client_url(update.message.from_user)
+        user["comment"] = ""
 
         await update.message.reply_text("Сколько мест необходимо?")
         return
@@ -314,7 +324,28 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # DATE
     if step == "date":
         user["date"] = text
+        user["step"] = "comment"
+
+        await update.message.reply_text(
+            "Добавьте комментарий к заказу, если нужно.\n\n"
+            "Например: номер рейса, много багажа, детское кресло, животное, "
+            "точное время, пожелания по остановкам.\n\n"
+            "Если комментария нет — нажмите «Без комментария» или напишите «-».",
+            reply_markup=COMMENT_KB,
+        )
+        return
+
+    # COMMENT
+    if step == "comment":
+        comment_text = text.strip()
+
+        if comment_text.lower() in ["без комментария", "-", "нет", "не", "no"]:
+            comment_text = ""
+
+        user["comment"] = comment_text
         user["step"] = "confirm"
+
+        comment_line = user["comment"] if user["comment"] else "—"
 
         await update.message.reply_text(
             f"🚕 Проверь заказ:\n\n"
@@ -322,7 +353,8 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 Мест: {user.get('seats', '—')}\n"
             f"📍 Откуда: {user['from']}\n"
             f"🏁 Куда: {user['to']}\n"
-            f"📅 Дата: {user['date']}",
+            f"📅 Дата: {user['date']}\n"
+            f"💬 Комментарий: {comment_line}",
             reply_markup=CONFIRM_KB,
         )
         return
@@ -372,6 +404,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📍 Откуда: {user['from']}\n"
                 f"🏁 Куда: {user['to']}\n"
                 f"📅 Дата: {user['date']}\n"
+                f"💬 Комментарий: {user.get('comment') or '—'}\n"
                 f"📊 Статус: waiting"
             )
 
@@ -451,7 +484,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user.get('from', '—')}\n"
                 f"🏁 Куда: {user.get('to', '—')}\n"
-                f"📅 Дата: {user.get('date', '—')}\n\n"
+                f"📅 Дата: {user.get('date', '—')}\n"
+                f"💬 Комментарий: {user.get('comment') or '—'}\n\n"
                 "Проверь поступление денег и нажми кнопку ниже."
             ),
             reply_markup=keyboard,
@@ -712,7 +746,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - HELP QUESTION VERSION", flush=True)
+    print("BOT STARTED - ORDER COMMENT VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
