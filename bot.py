@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telegram import (
@@ -29,6 +30,7 @@ ADMIN_IDS = {8308540295}
 ADMIN_CHAT_ID = -1003903294475
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
+
 BASE_CURRENCY = "GEL"
 
 EXCHANGE_RATES = {
@@ -37,6 +39,38 @@ EXCHANGE_RATES = {
     "EUR": 0.32,
     "RUB": 27.4,
 }
+
+
+# =========================
+# HELPERS
+# =========================
+
+def generate_order_id(user_id: int) -> str:
+    now = datetime.now().strftime("%Y%m%d-%H%M%S")
+    user_tail = str(user_id)[-4:]
+    return f"BT-{now}-{user_tail}"
+
+
+def get_client_name(tg_user) -> str:
+    full_name = " ".join(
+        part for part in [
+            tg_user.first_name,
+            tg_user.last_name,
+        ]
+        if part
+    )
+
+    if tg_user.username:
+        return f"{full_name} (@{tg_user.username})" if full_name else f"@{tg_user.username}"
+
+    return full_name or "Клиент"
+
+
+def get_client_url(tg_user) -> str:
+    if tg_user.username:
+        return f"https://t.me/{tg_user.username}"
+
+    return f"tg://user?id={tg_user.id}"
 
 
 def convert_price(amount_gel: float, currency: str) -> float:
@@ -55,6 +89,7 @@ def format_multicurrency(amount_gel: float) -> str:
         f"≈ {eur:.0f} EUR\n"
         f"≈ {rub:.0f} RUB"
     )
+
 
 # =========================
 # KEYBOARDS
@@ -87,6 +122,7 @@ PAYMENT_KB = InlineKeyboardMarkup(
         ]
     ]
 )
+
 
 # =========================
 # MEMORY
@@ -133,19 +169,24 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # MENU
     if text == "🚕 Заказать трансфер":
         user["step"] = "seats"
-        await update.message.reply_text(
-            "Сколько мест необходимо?\n\n"
-            "Введите число от 1 до 7."
-        )
+        user["order_id"] = generate_order_id(user_id)
+        user["client_name"] = get_client_name(update.message.from_user)
+        user["client_url"] = get_client_url(update.message.from_user)
+
+        await update.message.reply_text("Сколько мест необходимо?")
         return
 
     if text == "💰 Цены":
-        await update.message.reply_text("Батуми (Аэропорт) → Батуми - 100 \nБатуми → Тбилиси")
+        await update.message.reply_text(
+            "Батуми (Аэропорт) → Батуми - 100 GEL\n"
+            "Батуми → Тбилиси — цена по запросу"
+        )
         return
 
     if text == "📍 Маршруты":
         await update.message.reply_text(
-            "Батуми (Аэропорт) → Батуми\nБатуми → Тбилиси"
+            "Батуми (Аэропорт) → Батуми\n"
+            "Батуми → Тбилиси"
         )
         return
 
@@ -201,6 +242,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"🚕 Проверь заказ:\n\n"
+            f"🧾 Заказ: {user.get('order_id', '—')}\n"
             f"👥 Мест: {user.get('seats', '—')}\n"
             f"📍 Откуда: {user['from']}\n"
             f"🏁 Куда: {user['to']}\n"
@@ -235,13 +277,21 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "❌ Отклонить",
                             callback_data=f"reject_{user_id}",
                         ),
-                    ]
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "👤 Открыть клиента",
+                            url=user.get("client_url", f"tg://user?id={user_id}"),
+                        )
+                    ],
                 ]
             )
 
             order_text = (
                 "🚕 НОВАЯ ЗАЯВКА\n\n"
-                f"👤 Клиент: {user_id}\n"
+                f"🧾 Заказ: {user.get('order_id', '—')}\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {user_id}\n"
                 f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user['from']}\n"
                 f"🏁 Куда: {user['to']}\n"
@@ -305,7 +355,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "❌ Оплаты нет",
                         callback_data=f"reject_payment_{client_id}",
                     ),
-                ]
+                ],
+                [
+                    InlineKeyboardButton(
+                        "👤 Открыть клиента",
+                        url=user.get("client_url", f"tg://user?id={client_id}"),
+                    )
+                ],
             ]
         )
 
@@ -313,7 +369,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=ADMIN_CHAT_ID,
             text=(
                 "💳 КЛИЕНТ НАЖАЛ «Я ОПЛАТИЛ»\n\n"
-                f"👤 Клиент: {client_id}\n"
+                f"🧾 Заказ: {user.get('order_id', '—')}\n"
+                f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                f"🆔 Telegram ID: {client_id}\n"
                 f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user.get('from', '—')}\n"
                 f"🏁 Куда: {user.get('to', '—')}\n"
@@ -494,9 +552,9 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("price_for", None)
 
     await update.message.reply_text(
-    f"✅ Цена отправлена клиенту.\n\n"
-    f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}"
-)
+        f"✅ Цена отправлена клиенту.\n\n"
+        f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}"
+    )
 
     raise ApplicationHandlerStop
 
@@ -578,7 +636,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - SEATS FLOW VERSION", flush=True)
+    print("BOT STARTED - SEATS ORDER ID VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
