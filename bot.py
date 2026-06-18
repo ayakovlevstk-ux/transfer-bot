@@ -41,6 +41,28 @@ EXCHANGE_RATES = {
     "RUB": 27.4,
 }
 
+ROUTE_PRICES_GEL = {
+    "Батуми ↔ Сарпи": 35,
+    "Батуми ↔ Кобулети": 50,
+    "Батуми ↔ Уреки": 70,
+    "Батуми ↔ Кутаиси": 140,
+    "Батуми ↔ Боржоми": 210,
+    "Батуми ↔ Бакуриани": 240,
+    "Батуми ↔ Гудаури": 300,
+    "Батуми ↔ Казбеги": 320,
+    "Батуми ↔ Сигнахи": 330,
+    "Батуми ↔ Владикавказ": 350,
+    "Батуми ↔ Ереван": 420,
+}
+
+REQUEST_PRICE_ROUTES = {
+    "Батуми ↔ Баку",
+    "Другое направление",
+}
+
+DISCOUNT_SEATS_FROM = 4
+DISCOUNT_PERCENT = 5
+
 
 # =========================
 # HELPERS
@@ -100,6 +122,102 @@ def format_multicurrency(amount_gel: float) -> str:
     )
 
 
+def format_gel(amount: float) -> str:
+    if amount is None:
+        return "по запросу"
+
+    if float(amount).is_integer():
+        return f"{int(amount)} GEL"
+
+    return f"{amount:.2f} GEL"
+
+
+def calculate_order_price(route: str, seats: int):
+    per_seat = ROUTE_PRICES_GEL.get(route)
+
+    if per_seat is None:
+        return {
+            "route": route,
+            "seats": seats,
+            "per_seat": None,
+            "subtotal": None,
+            "discount_percent": 0,
+            "discount_amount": 0,
+            "total": None,
+        }
+
+    subtotal = per_seat * seats
+    discount_percent = DISCOUNT_PERCENT if seats >= DISCOUNT_SEATS_FROM else 0
+    discount_amount = round(subtotal * discount_percent / 100, 2)
+    total = round(subtotal - discount_amount, 2)
+
+    return {
+        "route": route,
+        "seats": seats,
+        "per_seat": per_seat,
+        "subtotal": subtotal,
+        "discount_percent": discount_percent,
+        "discount_amount": discount_amount,
+        "total": total,
+    }
+
+
+def price_summary(price_data: dict) -> str:
+    if not price_data or price_data.get("total") is None:
+        return "💰 Цена: по запросу"
+
+    lines = [
+        f"💰 Цена за 1 место: {format_gel(price_data['per_seat'])}",
+        f"👥 Мест: {price_data['seats']}",
+        f"🧾 Сумма: {format_gel(price_data['subtotal'])}",
+    ]
+
+    if price_data.get("discount_percent"):
+        lines.append(
+            f"🎁 Скидка {price_data['discount_percent']}%: "
+            f"-{format_gel(price_data['discount_amount'])}"
+        )
+
+    lines.append(f"✅ Итого: {format_gel(price_data['total'])}")
+
+    return "\n".join(lines)
+
+
+async def send_price_to_client(client_id: int, context: ContextTypes.DEFAULT_TYPE, price: float):
+    deposit = round(price * 0.5, 2)
+
+    user = get_user(client_id)
+    user["status"] = "awaiting_deposit"
+    user["price_gel"] = price
+    user["deposit_gel"] = deposit
+    user["price_usd"] = convert_price(price, "USD")
+    user["price_eur"] = convert_price(price, "EUR")
+    user["price_rub"] = convert_price(price, "RUB")
+
+    payment_link = PAYMENT_BASE_URL + str(client_id) + f"&amount={deposit}"
+
+    await context.bot.send_message(
+        chat_id=client_id,
+        text=(
+            "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
+            f"💰 Общая цена:\n{format_multicurrency(price)}\n\n"
+            f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
+            f"🔗 Оплатить: {payment_link}\n\n"
+            "⚠️ После оплаты место будет закреплено"
+        ),
+        reply_markup=PAYMENT_KB,
+    )
+
+    if user.get("timer_task"):
+        user["timer_task"].cancel()
+
+    user["timer_task"] = asyncio.create_task(
+        deposit_timer(client_id, context)
+    )
+
+    return deposit
+
+
 # =========================
 # KEYBOARDS
 # =========================
@@ -124,6 +242,20 @@ CONFIRM_KB = ReplyKeyboardMarkup(
 COMMENT_KB = ReplyKeyboardMarkup(
     [
         ["Без комментария"],
+        ["⬅️ Назад"],
+    ],
+    resize_keyboard=True,
+)
+
+ROUTE_KB = ReplyKeyboardMarkup(
+    [
+        ["Батуми ↔ Сарпи", "Батуми ↔ Кобулети"],
+        ["Батуми ↔ Уреки", "Батуми ↔ Кутаиси"],
+        ["Батуми ↔ Боржоми", "Батуми ↔ Бакуриани"],
+        ["Батуми ↔ Гудаури", "Батуми ↔ Казбеги"],
+        ["Батуми ↔ Сигнахи", "Батуми ↔ Владикавказ"],
+        ["Батуми ↔ Ереван", "Батуми ↔ Баку"],
+        ["Другое направление"],
         ["⬅️ Назад"],
     ],
     resize_keyboard=True,
@@ -192,6 +324,9 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["client_name"] = get_client_name(update.message.from_user)
         user["client_url"] = get_client_url(update.message.from_user)
         user["comment"] = ""
+        user["route"] = ""
+        user["price_data"] = None
+        user["total_price_gel"] = None
 
         await update.message.reply_text("Сколько мест необходимо?")
         return
@@ -356,15 +491,49 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         user["seats"] = seats
+        user["step"] = "route"
+
+        await update.message.reply_text(
+            "Выберите направление:",
+            reply_markup=ROUTE_KB,
+        )
+        return
+
+    # ROUTE
+    if step == "route":
+        route = text.strip()
+
+        if route not in ROUTE_PRICES_GEL and route not in REQUEST_PRICE_ROUTES:
+            await update.message.reply_text(
+                "Выберите направление кнопкой ниже или нажмите «Другое направление».",
+                reply_markup=ROUTE_KB,
+            )
+            return
+
+        user["route"] = route
+        price_data = calculate_order_price(route, int(user.get("seats", 1)))
+        user["price_data"] = price_data
+        user["total_price_gel"] = price_data.get("total")
+
+        await update.message.reply_text(
+            f"Направление: {route}\n"
+            f"{price_summary(price_data)}\n\n"
+            "Теперь уточните, откуда именно забрать пассажиров.\n"
+            "Например: Батуми, аэропорт / адрес / отель.",
+            reply_markup=CONFIRM_KB,
+        )
+
         user["step"] = "from"
-        await update.message.reply_text("Откуда едем?")
         return
 
     # FROM
     if step == "from":
         user["from"] = text
         user["step"] = "to"
-        await update.message.reply_text("Куда едем?")
+        await update.message.reply_text(
+            "Куда едем?\n"
+            "Например: Владикавказ / аэропорт / адрес / отель."
+        )
         return
 
     # TO
@@ -403,11 +572,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🚕 Проверь заказ:\n\n"
             f"🧾 Заказ: {user.get('order_id', '—')}\n"
+            f"🛣 Направление: {user.get('route', '—')}\n"
             f"👥 Мест: {user.get('seats', '—')}\n"
             f"📍 Откуда: {user['from']}\n"
             f"🏁 Куда: {user['to']}\n"
             f"📅 Дата: {user['date']}\n"
-            f"💬 Комментарий: {comment_line}",
+            f"💬 Комментарий: {comment_line}\n\n"
+            f"{price_summary(user.get('price_data'))}",
             reply_markup=CONFIRM_KB,
         )
         return
@@ -453,11 +624,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🧾 Заказ: {user.get('order_id', '—')}\n"
                 f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
                 f"🆔 Telegram ID: {user_id}\n"
+                f"🛣 Направление: {user.get('route', '—')}\n"
                 f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user['from']}\n"
                 f"🏁 Куда: {user['to']}\n"
                 f"📅 Дата: {user['date']}\n"
-                f"💬 Комментарий: {user.get('comment') or '—'}\n"
+                f"💬 Комментарий: {user.get('comment') or '—'}\n\n"
+                f"{price_summary(user.get('price_data'))}\n\n"
                 f"📊 Статус: waiting"
             )
 
@@ -534,11 +707,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🧾 Заказ: {user.get('order_id', '—')}\n"
                 f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
                 f"🆔 Telegram ID: {client_id}\n"
+                f"🛣 Направление: {user.get('route', '—')}\n"
                 f"👥 Мест: {user.get('seats', '—')}\n"
                 f"📍 Откуда: {user.get('from', '—')}\n"
                 f"🏁 Куда: {user.get('to', '—')}\n"
                 f"📅 Дата: {user.get('date', '—')}\n"
                 f"💬 Комментарий: {user.get('comment') or '—'}\n\n"
+                f"{price_summary(user.get('price_data'))}\n\n"
                 "Проверь поступление денег и нажми кнопку ниже."
             ),
             reply_markup=keyboard,
@@ -625,7 +800,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = get_user(client_id)
 
         user["status"] = "awaiting_deposit"
-        context.user_data["price_for"] = client_id
 
         await context.bot.send_message(
             chat_id=client_id,
@@ -636,7 +810,22 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         )
 
+        auto_price = user.get("total_price_gel")
+
+        if auto_price:
+            deposit = await send_price_to_client(client_id, context, auto_price)
+
+            await query.message.reply_text(
+                "✅ Заявка подтверждена.\n\n"
+                f"Цена рассчитана автоматически: {format_gel(auto_price)}\n"
+                f"Предоплата 50%: {format_gel(deposit)}"
+            )
+            return
+
+        context.user_data["price_for"] = client_id
+
         await query.message.reply_text(
+            "Цена по этому направлению не задана автоматически.\n"
             "Введите полную стоимость поездки в GEL. Например: 100"
         )
 
@@ -686,31 +875,19 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raise ApplicationHandlerStop
 
     client_id = context.user_data["price_for"]
-    deposit = round(price * 0.5, 2)
+    deposit = await send_price_to_client(client_id, context, price)
 
     user = get_user(client_id)
-    user["status"] = "awaiting_deposit"
-
-    payment_link = PAYMENT_BASE_URL + str(client_id) + f"&amount={deposit}"
-
-    await context.bot.send_message(
-        chat_id=client_id,
-        text=(
-            "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
-            f"💰 Общая цена:\n{format_multicurrency(price)}\n\n"
-            f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
-            f"🔗 Оплатить: {payment_link}\n\n"
-            "⚠️ После оплаты место будет закреплено"
-        ),
-        reply_markup=PAYMENT_KB,
-    )
-
-    if user.get("timer_task"):
-        user["timer_task"].cancel()
-
-    user["timer_task"] = asyncio.create_task(
-        deposit_timer(client_id, context)
-    )
+    user["price_data"] = {
+        "route": user.get("route", ""),
+        "seats": user.get("seats", 1),
+        "per_seat": None,
+        "subtotal": None,
+        "discount_percent": 0,
+        "discount_amount": 0,
+        "total": price,
+    }
+    user["total_price_gel"] = price
 
     context.user_data.pop("price_for", None)
 
@@ -799,7 +976,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - PARCEL BUTTON VERSION", flush=True)
+    print("BOT STARTED - AUTO PRICE VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
