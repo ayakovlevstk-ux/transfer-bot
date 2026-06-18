@@ -25,7 +25,8 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
-ADMIN_ID = 8308540295
+ADMIN_IDS = {8308540295}
+ADMIN_CHAT_ID = -1003903294475
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
@@ -110,12 +111,12 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "💰 Цены":
-        await update.message.reply_text("Керкраде → Амстердам = 120€")
+        await update.message.reply_text("Батуми (Аэропорт) → Батуми - 100 \nБатуми → Тбилиси")
         return
 
     if text == "📍 Маршруты":
         await update.message.reply_text(
-            "Керкраде → Амстердам\nКеркраде → Брюссель"
+            "Батуми (Аэропорт) → Батуми\nБатуми → Тбилиси"
         )
         return
 
@@ -196,7 +197,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             await context.bot.send_message(
-                chat_id=ADMIN_ID,
+                chat_id=ADMIN_CHAT_ID,
                 text=order_text,
                 reply_markup=keyboard,
             )
@@ -256,7 +257,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
+            chat_id=ADMIN_CHAT_ID,
             text=(
                 "💳 КЛИЕНТ НАЖАЛ «Я ОПЛАТИЛ»\n\n"
                 f"👤 Клиент: {client_id}\n"
@@ -277,7 +278,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ADMIN CONFIRM PAYMENT
     if data.startswith("confirm_payment_"):
-        if query.from_user.id != ADMIN_ID:
+        if query.from_user.id not in ADMIN_IDS:
             await query.message.reply_text("❌ Нет доступа")
             return
 
@@ -311,7 +312,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ADMIN REJECT PAYMENT
     if data.startswith("reject_payment_"):
-        if query.from_user.id != ADMIN_ID:
+        if query.from_user.id not in ADMIN_IDS:
             await query.message.reply_text("❌ Нет доступа")
             return
 
@@ -341,7 +342,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ADMIN ACCEPT ORDER
     if data.startswith("accept_"):
-        if query.from_user.id != ADMIN_ID:
+        if query.from_user.id not in ADMIN_IDS:
             await query.message.reply_text("❌ Нет доступа")
             return
 
@@ -368,7 +369,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ADMIN REJECT ORDER
     if data.startswith("reject_"):
-        if query.from_user.id != ADMIN_ID:
+        if query.from_user.id not in ADMIN_IDS:
             await query.message.reply_text("❌ Нет доступа")
             return
 
@@ -395,7 +396,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
+    if update.message.from_user.id not in ADMIN_IDS:
         return
 
     if "price_for" not in context.user_data:
