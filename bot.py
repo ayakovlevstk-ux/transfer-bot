@@ -42,6 +42,7 @@ BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tbilisi")
 BOT_TZ = ZoneInfo(BOT_TIMEZONE)
 
 REMINDER_CHECK_SECONDS = int(os.getenv("REMINDER_CHECK_SECONDS", "300"))
+LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "3600"))
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
@@ -150,6 +151,50 @@ def reminder_label(reminder_key: str) -> str:
         "reminder_1h_sent": "за 1 час",
     }
     return labels.get(reminder_key, "")
+
+
+def google_maps_link(lat, lng) -> str:
+    return f"https://maps.google.com/?q={lat},{lng}"
+
+
+def format_location_time(value: str) -> str:
+    dt = parse_supabase_datetime(value)
+    if not dt:
+        return "время не указано"
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
+def build_driver_location_text(order_or_user: dict) -> str:
+    lat = order_or_user.get("driver_lat")
+    lng = order_or_user.get("driver_lng")
+
+    if lat in ["", None] or lng in ["", None]:
+        return ""
+
+    link = google_maps_link(lat, lng)
+    updated_at = order_or_user.get("driver_location_updated_at")
+    live_active = order_or_user.get("live_tracking_active")
+
+    title = "📡 Live-геометка водителя:" if live_active else "📍 Последняя геометка водителя:"
+
+    return (
+        f"{title}\n"
+        f"{link}\n"
+        f"Обновлено: {format_location_time(updated_at)}"
+    )
+
+
+def live_session_key(chat_id, message_id) -> str:
+    return f"{chat_id}:{message_id}"
+
+
+def live_until_iso() -> str:
+    return (datetime.now(BOT_TZ) + timedelta(seconds=LIVE_TRACKING_SECONDS)).isoformat(timespec="seconds")
+
+
+def live_minutes_text() -> str:
+    minutes = max(1, int(LIVE_TRACKING_SECONDS / 60))
+    return f"{minutes} мин."
 
 
 def build_reminder_text(order: dict, reminder_key: str) -> str:
@@ -447,6 +492,13 @@ def order_payload(user_id: int, user: dict, status: str = None, notes: str = Non
         "driver_id": safe_float(user.get("driver_id")),
         "driver_lat": safe_float(user.get("driver_lat")),
         "driver_lng": safe_float(user.get("driver_lng")),
+        "driver_location_updated_at": str(user.get("driver_location_updated_at", "")),
+        "live_tracking_active": bool(user.get("live_tracking_active", False)),
+        "live_started_at": str(user.get("live_started_at", "")),
+        "live_until": str(user.get("live_until", "")),
+        "driver_live_chat_id": str(user.get("driver_live_chat_id", "")),
+        "driver_live_message_id": int(user.get("driver_live_message_id")) if str(user.get("driver_live_message_id", "")).isdigit() else None,
+        "client_live_message_id": int(user.get("client_live_message_id")) if str(user.get("client_live_message_id", "")).isdigit() else None,
     }
 
     if user.get("status") == "completed":
@@ -519,6 +571,41 @@ def patch_order_fields(order_id: str, fields: dict):
 
     except Exception as exc:
         print(f"SUPABASE PATCH EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_order_by_driver_live(chat_id, message_id):
+    if not SUPABASE_ENABLED:
+        return None
+
+    try:
+        params = (
+            f"?driver_live_chat_id=eq.{chat_id}"
+            f"&driver_live_message_id=eq.{message_id}"
+            "&live_tracking_active=eq.true"
+            "&select=order_id,telegram_id,status,route,seats,from_place,to_place,trip_date,"
+            "driver_lat,driver_lng,driver_location_updated_at,client_live_message_id,live_tracking_active"
+            "&limit=1"
+        )
+
+        response = requests.get(
+            supabase_table_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE LIVE FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        if data:
+            return data[0]
+
+        return None
+
+    except Exception as exc:
+        print(f"SUPABASE LIVE FETCH EXCEPTION: {exc}", flush=True)
         return None
 
 
@@ -637,7 +724,7 @@ def fetch_user_orders(user_id: int, limit: int = 10):
         params = (
             f"?telegram_id=eq.{user_id}"
             "&select=order_id,status,route,seats,from_place,to_place,trip_date,pickup_datetime,comment,"
-            "price_gel,deposit_gel,driver_name,driver_phone,driver_info,driver_id,updated_at,created_at"
+            "price_gel,deposit_gel,driver_name,driver_phone,driver_info,driver_id,driver_lat,driver_lng,driver_location_updated_at,live_tracking_active,live_until,updated_at,created_at"
             "&order=created_at.desc"
             f"&limit={limit}"
         )
@@ -678,6 +765,10 @@ def format_order_card(order: dict) -> str:
     if driver_info:
         lines.append(f"🚗 Водитель/машина: {driver_info}")
 
+    location_text = build_driver_location_text(order)
+    if location_text:
+        lines.append(location_text)
+
     return "\n".join(lines)
 
 
@@ -709,6 +800,10 @@ def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("🏁 Завершить", callback_data=f"st_done_{client_id}"),
                 InlineKeyboardButton("❌ Отменить", callback_data=f"st_cancel_{client_id}"),
+            ],
+            [
+                InlineKeyboardButton("📡 Live 1ч", callback_data=f"live_{client_id}"),
+                InlineKeyboardButton("📍 Геометка", callback_data=f"geo_{client_id}"),
             ],
             [
                 InlineKeyboardButton("✉️ Ответить клиенту", callback_data=f"reply_{client_id}"),
@@ -1568,6 +1663,41 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # ADMIN START LIVE TRACKING INPUT
+    if data.startswith("live_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("live_", ""))
+        context.chat_data["live_for"] = client_id
+
+        await query.message.reply_text(
+            "📡 Запуск live-отслеживания.\n\n"
+            f"Водитель должен отправить LIVE-геолокацию в этот чат на {live_minutes_text()}.\n\n"
+            "Как отправить:\n"
+            "📎 → Геопозиция / Location → Делиться геопозицией / Share Live Location.\n\n"
+            "После первой live-геометки бот создаст клиенту live-карту и будет обновлять её автоматически."
+        )
+        return
+
+    # ADMIN START DRIVER GEOLOCATION INPUT
+    if data.startswith("geo_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("geo_", ""))
+        context.user_data["location_for"] = client_id
+
+        await query.message.reply_text(
+            "📍 Отправьте геолокацию водителя следующим сообщением.\n\n"
+            "В Telegram нажмите 📎 → Геопозиция / Location → отправить текущую точку.\n\n"
+            "После этого клиент получит карту, а геометка сохранится в заказе.\n"
+            "Чтобы отменить, напишите: отмена"
+        )
+        return
+
     # ADMIN START DRIVER SELECTION BEFORE "ON WAY"
     if data.startswith("st_onway_"):
         if query.from_user.id not in ADMIN_IDS:
@@ -1958,12 +2088,217 @@ async def drivers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# ADMIN LOCATION
+# =========================
+
+async def admin_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    user_from = update.effective_user
+
+    if not message or not user_from:
+        return
+
+    location = message.location
+    if not location:
+        return
+
+    is_admin_or_group = (
+        user_from.id in ADMIN_IDS
+        or message.chat_id == ADMIN_CHAT_ID
+    )
+
+    if not is_admin_or_group:
+        return
+
+    is_live_location = bool(getattr(location, "live_period", None))
+
+    # Existing live session update from driver's edited live location.
+    session_key = live_session_key(message.chat_id, message.message_id)
+    session = context.application.bot_data.get("live_sessions", {}).get(session_key)
+
+    if not session and is_live_location:
+        stored_order = fetch_order_by_driver_live(message.chat_id, message.message_id)
+        if stored_order:
+            session = {
+                "client_id": int(stored_order["telegram_id"]),
+                "order_id": stored_order["order_id"],
+                "client_live_message_id": stored_order.get("client_live_message_id"),
+            }
+            context.application.bot_data.setdefault("live_sessions", {})[session_key] = session
+
+    if session:
+        client_id = int(session["client_id"])
+        user = get_user(client_id)
+        user["driver_lat"] = location.latitude
+        user["driver_lng"] = location.longitude
+        user["driver_location_updated_at"] = now_iso()
+        user["live_tracking_active"] = True
+
+        patch_order_fields(
+            session["order_id"],
+            {
+                "driver_lat": location.latitude,
+                "driver_lng": location.longitude,
+                "driver_location_updated_at": user["driver_location_updated_at"],
+                "live_tracking_active": True,
+            },
+        )
+
+        client_live_message_id = session.get("client_live_message_id")
+
+        if client_live_message_id:
+            try:
+                await context.bot.edit_message_live_location(
+                    chat_id=client_id,
+                    message_id=int(client_live_message_id),
+                    latitude=location.latitude,
+                    longitude=location.longitude,
+                )
+            except Exception as exc:
+                print(f"LIVE LOCATION EDIT ERROR: {exc}", flush=True)
+
+        raise ApplicationHandlerStop
+
+    # Start a new live session after admin pressed "📡 Live 1ч".
+    if is_live_location and "live_for" in context.chat_data:
+        client_id = int(context.chat_data["live_for"])
+        user = get_user(client_id)
+
+        live_message = await context.bot.send_location(
+            chat_id=client_id,
+            latitude=location.latitude,
+            longitude=location.longitude,
+            live_period=LIVE_TRACKING_SECONDS,
+        )
+
+        user["driver_lat"] = location.latitude
+        user["driver_lng"] = location.longitude
+        user["driver_location_updated_at"] = now_iso()
+        user["live_tracking_active"] = True
+        user["live_started_at"] = now_iso()
+        user["live_until"] = live_until_iso()
+        user["driver_live_chat_id"] = str(message.chat_id)
+        user["driver_live_message_id"] = message.message_id
+        user["client_live_message_id"] = live_message.message_id
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status=user.get("status") or "driver_on_way",
+            notes="Запущено live-отслеживание водителя",
+        )
+
+        session_key = live_session_key(message.chat_id, message.message_id)
+        context.application.bot_data.setdefault("live_sessions", {})[session_key] = {
+            "client_id": client_id,
+            "order_id": user.get("order_id"),
+            "client_live_message_id": live_message.message_id,
+        }
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                f"📡 Live-отслеживание водителя запущено на {live_minutes_text()}.\n\n"
+                "Карта выше будет обновляться автоматически, пока водитель делится геолокацией."
+            ),
+        )
+
+        await message.reply_text(
+            "✅ Live-отслеживание запущено.\n"
+            "Клиент получил live-карту.",
+            reply_markup=status_admin_keyboard(client_id),
+        )
+
+        context.chat_data.pop("live_for", None)
+        raise ApplicationHandlerStop
+
+    # Normal one-time geolocation mode.
+    if "location_for" not in context.user_data:
+        return
+
+    client_id = context.user_data["location_for"]
+
+    user = get_user(client_id)
+    user["driver_lat"] = location.latitude
+    user["driver_lng"] = location.longitude
+    user["driver_location_updated_at"] = now_iso()
+
+    save_order(
+        user_id=client_id,
+        user=user,
+        status=user.get("status") or "driver_on_way",
+        notes="Обновлена геометка водителя",
+    )
+
+    map_link = google_maps_link(location.latitude, location.longitude)
+
+    try:
+        await context.bot.send_location(
+            chat_id=client_id,
+            latitude=location.latitude,
+            longitude=location.longitude,
+        )
+
+        await context.bot.send_message(
+            chat_id=client_id,
+            text=(
+                "📍 Геометка водителя обновлена.\n\n"
+                f"Открыть на карте:\n{map_link}\n\n"
+                "Последнюю геометку также можно посмотреть в разделе «📋 Мои заказы»."
+            ),
+        )
+
+        await message.reply_text(
+            "✅ Геометка отправлена клиенту и сохранена в заказе.",
+            reply_markup=status_admin_keyboard(client_id),
+        )
+
+    except Exception as exc:
+        await message.reply_text(
+            f"❌ Не удалось отправить геометку клиенту: {exc}"
+        )
+
+    context.user_data.pop("location_for", None)
+    raise ApplicationHandlerStop
+
+
+# =========================
 # ADMIN PRICE
 # =========================
 
 async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id not in ADMIN_IDS:
         return
+
+    if "live_for" in context.chat_data:
+        text = update.message.text.strip().lower()
+
+        if text in ["отмена", "cancel", "❌ отмена"]:
+            context.chat_data.pop("live_for", None)
+            await update.message.reply_text("Запуск live-отслеживания отменён.")
+            raise ApplicationHandlerStop
+
+        await update.message.reply_text(
+            "Сейчас ожидается LIVE-геолокация.\n"
+            "Нажмите 📎 → Геопозиция / Location → Делиться геопозицией / Share Live Location.\n"
+            "Для отмены напишите: отмена"
+        )
+        raise ApplicationHandlerStop
+
+    if "location_for" in context.user_data:
+        text = update.message.text.strip().lower()
+
+        if text in ["отмена", "cancel", "❌ отмена"]:
+            context.user_data.pop("location_for", None)
+            await update.message.reply_text("Отправка геометки отменена.")
+            raise ApplicationHandlerStop
+
+        await update.message.reply_text(
+            "Сейчас ожидается геолокация.\n"
+            "Нажмите 📎 → Геопозиция / Location → отправить текущую точку.\n"
+            "Для отмены напишите: отмена"
+        )
+        raise ApplicationHandlerStop
 
     if "create_driver_for" in context.user_data:
         client_id = context.user_data["create_driver_for"]
@@ -2195,6 +2530,11 @@ def main():
     app.add_handler(CallbackQueryHandler(callbacks))
 
     app.add_handler(
+        MessageHandler(filters.LOCATION, admin_location),
+        group=0,
+    )
+
+    app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, admin_price),
         group=0,
     )
@@ -2204,7 +2544,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - REMINDERS V2 VERSION", flush=True)
+    print("BOT STARTED - LIVE LOCATION V4A VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
