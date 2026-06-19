@@ -3,7 +3,8 @@ import asyncio
 import threading
 import secrets
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telegram import (
@@ -36,6 +37,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_TABLE_NAME = os.getenv("SUPABASE_TABLE_NAME", "orders")
 SUPABASE_DRIVERS_TABLE_NAME = os.getenv("SUPABASE_DRIVERS_TABLE_NAME", "drivers")
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_TABLE_NAME)
+
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tbilisi")
+BOT_TZ = ZoneInfo(BOT_TIMEZONE)
+
+REMINDER_CHECK_SECONDS = int(os.getenv("REMINDER_CHECK_SECONDS", "300"))
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
@@ -86,11 +92,81 @@ STATUS_LABELS = {
 
 
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now(BOT_TZ).isoformat(timespec="seconds")
 
 
 def status_label(status: str) -> str:
     return STATUS_LABELS.get(status or "", status or "не указан")
+
+
+def parse_trip_datetime(text: str):
+    raw = text.strip()
+    current_year = datetime.now(BOT_TZ).year
+
+    formats = [
+        ("%d.%m.%Y %H:%M", False),
+        ("%d.%m.%y %H:%M", False),
+        ("%d.%m %H:%M", True),
+    ]
+
+    for fmt, add_year in formats:
+        try:
+            dt = datetime.strptime(raw, fmt)
+
+            if add_year:
+                dt = dt.replace(year=current_year)
+
+                # Если дата уже сильно в прошлом, считаем, что человек имел в виду следующий год.
+                if dt.replace(tzinfo=BOT_TZ) < datetime.now(BOT_TZ) - timedelta(days=2):
+                    dt = dt.replace(year=current_year + 1)
+
+            dt = dt.replace(tzinfo=BOT_TZ)
+            return dt
+
+        except ValueError:
+            continue
+
+    return None
+
+
+def format_trip_datetime(dt: datetime) -> str:
+    return dt.astimezone(BOT_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def parse_supabase_datetime(value: str):
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(BOT_TZ)
+    except ValueError:
+        return None
+
+
+def reminder_label(reminder_key: str) -> str:
+    labels = {
+        "reminder_24h_sent": "за 24 часа",
+        "reminder_3h_sent": "за 3 часа",
+        "reminder_1h_sent": "за 1 час",
+    }
+    return labels.get(reminder_key, "")
+
+
+def build_reminder_text(order: dict, reminder_key: str) -> str:
+    pickup_dt = parse_supabase_datetime(order.get("pickup_datetime"))
+    pickup_text = format_trip_datetime(pickup_dt) if pickup_dt else order.get("trip_date", "—")
+
+    return (
+        f"⏰ Напоминание о рейсе {reminder_label(reminder_key)}\\n\\n"
+        f"🧾 Заказ: {order.get('order_id', '—')}\\n"
+        f"🛣 Направление: {order.get('route', '—')}\\n"
+        f"👥 Мест: {order.get('seats', '—')}\\n"
+        f"📍 Откуда: {order.get('from_place', '—')}\\n"
+        f"🏁 Куда: {order.get('to_place', '—')}\\n"
+        f"📅 Дата и время: {pickup_text}\\n"
+        f"📊 Статус: {status_label(order.get('status'))}\\n\\n"
+        "Актуальный статус можно посмотреть в разделе «📋 Мои заказы»."
+    )
 
 
 def supabase_headers(prefer: str = None) -> dict:
@@ -353,6 +429,10 @@ def order_payload(user_id: int, user: dict, status: str = None, notes: str = Non
         "from_place": str(user.get("from", "")),
         "to_place": str(user.get("to", "")),
         "trip_date": str(user.get("date", "")),
+        "pickup_datetime": str(user.get("pickup_datetime", "")),
+        "reminder_24h_sent": bool(user.get("reminder_24h_sent", False)),
+        "reminder_3h_sent": bool(user.get("reminder_3h_sent", False)),
+        "reminder_1h_sent": bool(user.get("reminder_1h_sent", False)),
         "comment": str(user.get("comment", "")),
         "status": str(user.get("status", "")),
         "price_gel": safe_float(user.get("price_gel") or user.get("total_price_gel")),
@@ -417,6 +497,138 @@ def save_order(user_id: int, user: dict, status: str = None, notes: str = None):
         return None
 
 
+def patch_order_fields(order_id: str, fields: dict):
+    if not SUPABASE_ENABLED or not order_id:
+        return None
+
+    fields["updated_at"] = now_iso()
+
+    try:
+        response = requests.patch(
+            supabase_table_url(f"?order_id=eq.{order_id}"),
+            headers=supabase_headers("return=representation"),
+            json=fields,
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE PATCH ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        return response.json()
+
+    except Exception as exc:
+        print(f"SUPABASE PATCH EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_orders_for_reminders(limit: int = 200):
+    if not SUPABASE_ENABLED:
+        return []
+
+    try:
+        params = (
+            "?pickup_datetime=not.is.null"
+            "&status=in.(reserved,driver_assigned,driver_on_way,driver_arrived,passenger_picked,in_progress)"
+            "&select=order_id,telegram_id,status,route,seats,from_place,to_place,trip_date,pickup_datetime,"
+            "reminder_24h_sent,reminder_3h_sent,reminder_1h_sent"
+            "&order=pickup_datetime.asc"
+            f"&limit={limit}"
+        )
+
+        response = requests.get(
+            supabase_table_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE REMINDERS FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return []
+
+        return response.json()
+
+    except Exception as exc:
+        print(f"SUPABASE REMINDERS FETCH EXCEPTION: {exc}", flush=True)
+        return []
+
+
+def due_reminder_key(order: dict, now_dt: datetime):
+    pickup_dt = parse_supabase_datetime(order.get("pickup_datetime"))
+    if not pickup_dt:
+        return None
+
+    remaining = pickup_dt - now_dt
+
+    if remaining < timedelta(minutes=-30):
+        return None
+
+    if (
+        remaining <= timedelta(hours=1)
+        and not order.get("reminder_1h_sent")
+    ):
+        return "reminder_1h_sent"
+
+    if (
+        remaining <= timedelta(hours=3)
+        and remaining > timedelta(hours=1)
+        and not order.get("reminder_3h_sent")
+    ):
+        return "reminder_3h_sent"
+
+    if (
+        remaining <= timedelta(hours=24)
+        and remaining > timedelta(hours=3)
+        and not order.get("reminder_24h_sent")
+    ):
+        return "reminder_24h_sent"
+
+    return None
+
+
+async def reminder_loop(application):
+    print("REMINDER LOOP STARTED", flush=True)
+
+    while True:
+        try:
+            if SUPABASE_ENABLED:
+                now_dt = datetime.now(BOT_TZ)
+                orders = fetch_orders_for_reminders()
+
+                for order in orders:
+                    key = due_reminder_key(order, now_dt)
+
+                    if not key:
+                        continue
+
+                    telegram_id = order.get("telegram_id")
+                    order_id = order.get("order_id")
+
+                    if not telegram_id or not order_id:
+                        continue
+
+                    try:
+                        await application.bot.send_message(
+                            chat_id=int(telegram_id),
+                            text=build_reminder_text(order, key),
+                        )
+
+                        patch_order_fields(order_id, {key: True})
+                        print(f"REMINDER SENT {key} ORDER {order_id}", flush=True)
+
+                    except Exception as exc:
+                        print(f"REMINDER SEND ERROR ORDER {order_id}: {exc}", flush=True)
+
+        except Exception as exc:
+            print(f"REMINDER LOOP ERROR: {exc}", flush=True)
+
+        await asyncio.sleep(REMINDER_CHECK_SECONDS)
+
+
+async def post_init(application):
+    application.create_task(reminder_loop(application))
+
+
 def fetch_user_orders(user_id: int, limit: int = 10):
     if not SUPABASE_ENABLED:
         return None
@@ -424,7 +636,7 @@ def fetch_user_orders(user_id: int, limit: int = 10):
     try:
         params = (
             f"?telegram_id=eq.{user_id}"
-            "&select=order_id,status,route,seats,from_place,to_place,trip_date,comment,"
+            "&select=order_id,status,route,seats,from_place,to_place,trip_date,pickup_datetime,comment,"
             "price_gel,deposit_gel,driver_name,driver_phone,driver_info,driver_id,updated_at,created_at"
             "&order=created_at.desc"
             f"&limit={limit}"
@@ -458,7 +670,7 @@ def format_order_card(order: dict) -> str:
         f"👥 Мест: {order.get('seats', '—')}",
         f"📍 Откуда: {order.get('from_place', '—')}",
         f"🏁 Куда: {order.get('to_place', '—')}",
-        f"📅 Дата: {order.get('trip_date', '—')}",
+        f"📅 Дата: {format_trip_datetime(parse_supabase_datetime(order.get('pickup_datetime'))) if order.get('pickup_datetime') else order.get('trip_date', '—')}",
         f"💰 Цена: {price_text}",
     ]
 
@@ -811,6 +1023,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["client_name"] = get_client_name(update.message.from_user)
         user["client_url"] = get_client_url(update.message.from_user)
         user["comment"] = ""
+        user["pickup_datetime"] = ""
+        user["reminder_24h_sent"] = False
+        user["reminder_3h_sent"] = False
+        user["reminder_1h_sent"] = False
         user["route"] = ""
         user["price_data"] = None
         user["total_price_gel"] = None
@@ -1092,18 +1308,39 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == "to":
         user["to"] = text
         user["step"] = "date"
-        await update.message.reply_text("Введите дату 📅")
+        await update.message.reply_text(
+            "Введите дату и время рейса в формате:\n\n"
+            "25.06 14:30\n"
+            "или\n"
+            "25.06.2026 14:30\n\n"
+            "Это нужно для автоматических напоминаний пассажиру."
+        )
         return
 
     # DATE
     if step == "date":
-        user["date"] = text
+        pickup_dt = parse_trip_datetime(text)
+
+        if not pickup_dt:
+            await update.message.reply_text(
+                "Не понял дату. Введите строго в формате:\n\n"
+                "25.06 14:30\n"
+                "или\n"
+                "25.06.2026 14:30"
+            )
+            return
+
+        user["pickup_datetime"] = pickup_dt.isoformat()
+        user["date"] = format_trip_datetime(pickup_dt)
+        user["reminder_24h_sent"] = False
+        user["reminder_3h_sent"] = False
+        user["reminder_1h_sent"] = False
         user["step"] = "comment"
 
         await update.message.reply_text(
             "Добавьте комментарий к заказу, если нужно.\n\n"
             "Например: номер рейса, много багажа, детское кресло, животное, "
-            "точное время, пожелания по остановкам.\n\n"
+            "пожелания по остановкам.\n\n"
             "Если комментария нет — нажмите «Без комментария» или напишите «-».",
             reply_markup=COMMENT_KB,
         )
@@ -1950,7 +2187,7 @@ def main():
     else:
         print("SUPABASE DISABLED: My Orders history will not persist", flush=True)
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("drivers", drivers_command))
@@ -1967,7 +2204,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - DRIVER CARDS VERSION", flush=True)
+    print("BOT STARTED - REMINDERS V2 VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
