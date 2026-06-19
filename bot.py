@@ -3,6 +3,7 @@ import asyncio
 import threading
 import secrets
 import requests
+import html
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,7 +37,12 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_TABLE_NAME = os.getenv("SUPABASE_TABLE_NAME", "orders")
 SUPABASE_DRIVERS_TABLE_NAME = os.getenv("SUPABASE_DRIVERS_TABLE_NAME", "drivers")
+SUPABASE_REVIEWS_TABLE_NAME = os.getenv("SUPABASE_REVIEWS_TABLE_NAME", "reviews")
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_TABLE_NAME)
+
+PUBLIC_REVIEWS_URL = os.getenv("PUBLIC_REVIEWS_URL", "https://transfer-bot-c5yn.onrender.com/reviews")
+PUBLIC_BOT_URL = os.getenv("PUBLIC_BOT_URL", "")
+PUBLIC_SITE_TITLE = os.getenv("PUBLIC_SITE_TITLE", "Трансферы из Батуми")
 
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tbilisi")
 BOT_TZ = ZoneInfo(BOT_TIMEZONE)
@@ -68,55 +74,79 @@ DISCOUNT_SEATS_FROM = 4
 DISCOUNT_PERCENT = 5
 
 
-FAQ_TEXT = """📄 Правила и частые вопросы
+FAQ_ITEMS = {
+    "💳 Предоплата": (
+        "💳 Когда возвращается предоплата?\n\n"
+        "Предоплата возвращается полностью, если поездка не состоялась по нашей стороне: "
+        "водитель не смог приехать, машина не была найдена или мы сами отменили заказ.\n\n"
+        "Если клиент отменяет поездку заранее, не позднее чем за 24 часа до выезда, "
+        "предоплата возвращается или переносится на другую дату.\n\n"
+        "Если отмена меньше чем за 24 часа до выезда, предоплата может быть удержана, "
+        "потому что водитель уже зарезервировал время и отказался от других заказов.\n\n"
+        "В спорных ситуациях решение принимает менеджер."
+    ),
+    "🚗 Водитель опоздал": (
+        "🚗 Что если водитель опоздал?\n\n"
+        "Мы заранее отправляем данные водителя и live-трекинг, чтобы клиент видел машину на карте.\n\n"
+        "Если водитель задерживается, менеджер сообщает клиенту причину и новое время прибытия. "
+        "Если задержка значительная и клиент не может ждать, мы стараемся найти замену.\n\n"
+        "Если задержка произошла по нашей вине и поездка из-за этого сорвалась, "
+        "предоплата возвращается или переносится на другой заказ."
+    ),
+    "⏱ Клиент опоздал": (
+        "⏱ Что если клиент опоздал?\n\n"
+        "Водитель бесплатно ожидает до 15 минут после согласованного времени.\n\n"
+        "Если клиент предупреждает заранее, мы стараемся перенести время или договориться с водителем.\n\n"
+        "Если клиент не выходит на связь или сильно опаздывает, водитель может уехать, "
+        "а предоплата может быть удержана как компенсация за резерв машины и время водителя."
+    ),
+    "⛰ Граница закрыта": (
+        "⛰ Что если граница закрыта или дорога перекрыта?\n\n"
+        "Мы не можем гарантировать прохождение границы, работу КПП, погоду, очереди "
+        "и решения пограничных служб.\n\n"
+        "Если граница или дорога закрыта до начала поездки, заказ можно перенести "
+        "или отменить с возвратом предоплаты.\n\n"
+        "Если проблема возникла уже в пути, менеджер связывается с клиентом и водителем. "
+        "Возможны ожидание, изменение маршрута, перенос поездки или расчёт фактически выполненной части маршрута."
+    ),
+    "🧳 Много багажа": (
+        "🧳 Что если много багажа?\n\n"
+        "Сообщите о багаже заранее при оформлении заказа.\n\n"
+        "Стандартно считается обычный багаж пассажира: чемодан или сумка на человека.\n\n"
+        "Если есть крупный багаж, коробки, детская коляска, животное, спортивное снаряжение "
+        "или посылки, это нужно указать до подтверждения поездки.\n\n"
+        "Если багаж не был указан заранее и не помещается в машину, может потребоваться "
+        "доплата, замена автомобиля или второй автомобиль."
+    ),
+}
 
-1. Когда возвращается предоплата?
+FAQ_MENU_TEXT = (
+    "📄 Правила и FAQ\n\n"
+    "Выберите вопрос, который хотите открыть:"
+)
 
-Предоплата возвращается полностью, если поездка не состоялась по нашей стороне: водитель не смог приехать, машина не была найдена или мы сами отменили заказ.
-
-Если клиент отменяет поездку заранее, не позднее чем за 24 часа до выезда, предоплата возвращается или переносится на другую дату.
-
-Если отмена меньше чем за 24 часа до выезда, предоплата может быть удержана, потому что водитель уже зарезервировал время и отказался от других заказов. В спорных ситуациях решение принимает менеджер.
-
-2. Что если водитель опоздал?
-
-Мы заранее отправляем данные водителя и live-трекинг, чтобы клиент видел машину на карте.
-
-Если водитель задерживается, менеджер сообщает клиенту причину и новое время прибытия. Если задержка значительная и клиент не может ждать, мы стараемся найти замену.
-
-Если задержка произошла по нашей вине и поездка из-за этого сорвалась, предоплата возвращается или переносится на другой заказ.
-
-3. Что если клиент опоздал?
-
-Водитель бесплатно ожидает до 15 минут после согласованного времени.
-
-Если клиент предупреждает заранее, мы стараемся перенести время или договориться с водителем.
-
-Если клиент не выходит на связь или сильно опаздывает, водитель может уехать, а предоплата может быть удержана как компенсация за резерв машины и время водителя.
-
-4. Что если граница закрыта или дорога перекрыта?
-
-Мы не можем гарантировать прохождение границы, работу КПП, погоду, очереди и решения пограничных служб.
-
-Если граница или дорога закрыта до начала поездки, заказ можно перенести или отменить с возвратом предоплаты.
-
-Если проблема возникла уже в пути, менеджер связывается с клиентом и водителем. Возможны ожидание, изменение маршрута, перенос поездки или расчёт фактически выполненной части маршрута.
-
-5. Что если много багажа?
-
-Сообщите о багаже заранее при оформлении заказа.
-
-Стандартно считается обычный багаж пассажира: чемодан или сумка на человека. Если есть крупный багаж, коробки, детская коляска, животное, спортивное снаряжение или посылки, это нужно указать до подтверждения поездки.
-
-Если багаж не был указан заранее и не помещается в машину, может потребоваться доплата, замена автомобиля или второй автомобиль.
-
-⚠️ Финальные условия по нестандартным ситуациям подтверждает менеджер до поездки.
-"""
+FAQ_NOTICE_TEXT = (
+    "⚠️ Финальные условия по нестандартным ситуациям подтверждает менеджер до поездки."
+)
 
 
 HELP_KB = ReplyKeyboardMarkup(
     [
         ["📄 Правила и FAQ"],
+        ["✍️ Написать менеджеру"],
+        ["⬅️ Назад"],
+    ],
+    resize_keyboard=True,
+)
+
+
+FAQ_KB = ReplyKeyboardMarkup(
+    [
+        ["💳 Предоплата"],
+        ["🚗 Водитель опоздал"],
+        ["⏱ Клиент опоздал"],
+        ["⛰ Граница закрыта"],
+        ["🧳 Много багажа"],
         ["✍️ Написать менеджеру"],
         ["⬅️ Назад"],
     ],
@@ -289,6 +319,10 @@ def supabase_table_url(params: str = "") -> str:
 
 def supabase_drivers_url(params: str = "") -> str:
     return f"{SUPABASE_URL}/rest/v1/{SUPABASE_DRIVERS_TABLE_NAME}{params}"
+
+
+def supabase_reviews_url(params: str = "") -> str:
+    return f"{SUPABASE_URL}/rest/v1/{SUPABASE_REVIEWS_TABLE_NAME}{params}"
 
 
 def parse_driver_card_text(text: str) -> dict:
@@ -631,6 +665,237 @@ def patch_order_fields(order_id: str, fields: dict):
         return None
 
 
+def public_client_name(name: str) -> str:
+    raw = (name or "").strip()
+
+    if not raw:
+        return "Клиент"
+
+    raw = raw.split("(@")[0].strip()
+    raw = raw.split("@")[0].strip()
+    first = raw.split()[0] if raw.split() else "Клиент"
+
+    return first[:24]
+
+
+def create_review(user_id: int, user: dict, rating: int, comment: str = ""):
+    if not SUPABASE_ENABLED:
+        print("SUPABASE DISABLED: review not saved", flush=True)
+        return None
+
+    order_id = str(user.get("review_order_id") or user.get("order_id") or "")
+    order = fetch_order_by_order_id(order_id) if order_id else None
+
+    payload = {
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "order_id": order_id,
+        "telegram_id": str(user_id),
+        "client_name": str(user.get("client_name") or (order or {}).get("client_name") or "Клиент"),
+        "route": str(user.get("route") or (order or {}).get("route") or ""),
+        "rating": int(rating),
+        "comment": str(comment or "").strip(),
+        "is_public": True,
+        "is_approved": True,
+    }
+
+    payload = {
+        key: value
+        for key, value in payload.items()
+        if value not in [None, ""]
+    }
+
+    try:
+        response = requests.post(
+            supabase_reviews_url(),
+            headers=supabase_headers("return=representation"),
+            json=payload,
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE REVIEW CREATE ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        if isinstance(data, list) and data:
+            return data[0]
+
+        return None
+
+    except Exception as exc:
+        print(f"SUPABASE REVIEW CREATE EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_public_reviews(limit: int = 50):
+    if not SUPABASE_ENABLED:
+        return []
+
+    try:
+        params = (
+            "?is_public=eq.true"
+            "&is_approved=eq.true"
+            "&select=rating,comment,client_name,route,created_at"
+            "&order=created_at.desc"
+            f"&limit={limit}"
+        )
+
+        response = requests.get(
+            supabase_reviews_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE REVIEWS FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return []
+
+        return response.json()
+
+    except Exception as exc:
+        print(f"SUPABASE REVIEWS FETCH EXCEPTION: {exc}", flush=True)
+        return []
+
+
+def render_reviews_html() -> str:
+    reviews = fetch_public_reviews(limit=80)
+
+    cards = []
+
+    for review in reviews:
+        rating = int(review.get("rating") or 0)
+        stars = "⭐" * max(1, min(5, rating))
+        name = html.escape(public_client_name(review.get("client_name")))
+        route = html.escape(review.get("route") or "Маршрут не указан")
+        comment = html.escape((review.get("comment") or "Оценка без комментария").strip())
+
+        cards.append(
+            f"""
+            <article class="card">
+                <div class="stars">{stars}</div>
+                <p class="comment">{comment}</p>
+                <div class="meta">{name} · {route}</div>
+            </article>
+            """
+        )
+
+    if not cards:
+        cards.append(
+            """
+            <article class="card empty">
+                <div class="stars">⭐</div>
+                <p class="comment">Отзывы скоро появятся после первых завершённых поездок.</p>
+                <div class="meta">Трансферы из Батуми</div>
+            </article>
+            """
+        )
+
+    cta = ""
+    if PUBLIC_BOT_URL:
+        safe_bot_url = html.escape(PUBLIC_BOT_URL)
+        cta = f'<a class="button" href="{safe_bot_url}">Заказать трансфер в Telegram</a>'
+
+    title = html.escape(PUBLIC_SITE_TITLE)
+
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Отзывы — {title}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f5f5f5;
+      color: #171717;
+    }}
+    .wrap {{
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 32px 16px 48px;
+    }}
+    .hero {{
+      background: #111827;
+      color: #fff;
+      border-radius: 24px;
+      padding: 28px;
+      margin-bottom: 22px;
+    }}
+    .hero h1 {{
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.1;
+    }}
+    .hero p {{
+      margin: 0;
+      color: #d1d5db;
+      font-size: 16px;
+      line-height: 1.5;
+    }}
+    .button {{
+      display: inline-block;
+      margin-top: 18px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: #22c55e;
+      color: #07130b;
+      font-weight: 700;
+      text-decoration: none;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }}
+    .card {{
+      background: white;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.06);
+    }}
+    .stars {{
+      font-size: 20px;
+      margin-bottom: 12px;
+    }}
+    .comment {{
+      font-size: 16px;
+      line-height: 1.5;
+      margin: 0 0 16px;
+      white-space: pre-wrap;
+    }}
+    .meta {{
+      color: #6b7280;
+      font-size: 14px;
+    }}
+    .empty {{
+      grid-column: 1 / -1;
+    }}
+    .footer {{
+      margin-top: 24px;
+      color: #6b7280;
+      font-size: 13px;
+      text-align: center;
+    }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Отзывы клиентов</h1>
+      <p>{title}: трансферы, посылки, водитель заранее, статусы поездки и live-трекинг.</p>
+      {cta}
+    </section>
+    <section class="grid">
+      {''.join(cards)}
+    </section>
+    <div class="footer">Отзывы оставляют клиенты после завершённой поездки.</div>
+  </main>
+</body>
+</html>"""
+
+
 def fetch_order_by_order_id(order_id: str):
     if not SUPABASE_ENABLED or not order_id:
         return None
@@ -638,7 +903,7 @@ def fetch_order_by_order_id(order_id: str):
     try:
         params = (
             f"?order_id=eq.{order_id}"
-            "&select=order_id,telegram_id,status,driver_live_chat_id,driver_live_message_id,"
+            "&select=order_id,telegram_id,client_name,route,status,driver_live_chat_id,driver_live_message_id,"
             "client_live_message_id,live_tracking_active"
             "&limit=1"
         )
@@ -958,6 +1223,25 @@ def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
     )
 
 
+async def send_review_request(client_id: int, user: dict, context: ContextTypes.DEFAULT_TYPE):
+    order_id = str(user.get("order_id", ""))
+
+    if not order_id:
+        return
+
+    text = (
+        "⭐ Поделитесь впечатлением о поездке.\n\n"
+        "Оцените рейс от 1 до 5. После оценки можно будет оставить короткий комментарий.\n\n"
+        "Отзывы помогают новым клиентам понять, что сервису можно доверять."
+    )
+
+    await context.bot.send_message(
+        chat_id=client_id,
+        text=text,
+        reply_markup=review_rating_keyboard(client_id, order_id),
+    )
+
+
 async def set_trip_status(client_id: int, status: str, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(client_id)
     user["status"] = status
@@ -1004,6 +1288,9 @@ async def set_trip_status(client_id: int, status: str, context: ContextTypes.DEF
         chat_id=client_id,
         text=client_messages.get(status, f"📊 Статус заказа обновлён: {status_label(status)}"),
     )
+
+    if status == "completed":
+        await send_review_request(client_id, user, context)
 
 
 
@@ -1173,7 +1460,8 @@ MENU = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
         ["💰 Цены", "📦 Посылка"],
-        ["📋 Мои заказы", "❓ Помощь"],
+        ["📋 Мои заказы", "⭐ Отзывы"],
+        ["❓ Помощь"],
     ],
     resize_keyboard=True,
 )
@@ -1215,6 +1503,22 @@ PAYMENT_KB = InlineKeyboardMarkup(
         ]
     ]
 )
+
+
+def review_rating_keyboard(client_id: int, order_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("⭐ 5", callback_data=f"review_rate_5_{client_id}_{order_id}"),
+                InlineKeyboardButton("⭐ 4", callback_data=f"review_rate_4_{client_id}_{order_id}"),
+                InlineKeyboardButton("⭐ 3", callback_data=f"review_rate_3_{client_id}_{order_id}"),
+            ],
+            [
+                InlineKeyboardButton("⭐ 2", callback_data=f"review_rate_2_{client_id}_{order_id}"),
+                InlineKeyboardButton("⭐ 1", callback_data=f"review_rate_1_{client_id}_{order_id}"),
+            ],
+        ]
+    )
 
 
 # =========================
@@ -1320,22 +1624,38 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if text == "⭐ Отзывы":
+        await update.message.reply_text(
+            "⭐ Отзывы клиентов можно посмотреть здесь:\n"
+            f"{PUBLIC_REVIEWS_URL}",
+            reply_markup=MENU,
+        )
+        return
+
     if text == "❓ Помощь":
         user["step"] = None
         user["client_name"] = get_client_name(update.message.from_user)
         user["client_url"] = get_client_url(update.message.from_user)
 
         await update.message.reply_text(
-            FAQ_TEXT + "\n\nЕсли вопрос не решён, нажмите «✍️ Написать менеджеру».",
-            reply_markup=HELP_KB,
+            FAQ_MENU_TEXT,
+            reply_markup=FAQ_KB,
         )
         return
 
     if text == "📄 Правила и FAQ":
         user["step"] = None
         await update.message.reply_text(
-            FAQ_TEXT,
-            reply_markup=HELP_KB,
+            FAQ_MENU_TEXT,
+            reply_markup=FAQ_KB,
+        )
+        return
+
+    if text in FAQ_ITEMS:
+        user["step"] = None
+        await update.message.reply_text(
+            FAQ_ITEMS[text] + "\n\n" + FAQ_NOTICE_TEXT,
+            reply_markup=FAQ_KB,
         )
         return
 
@@ -1348,7 +1668,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Напишите ваш вопрос одним сообщением.\n"
             "Я передам его менеджеру 🚕\n\n"
             "Чтобы вернуться в меню, нажмите «⬅️ Назад».",
-            reply_markup=HELP_KB,
+            reply_markup=FAQ_KB,
         )
         return
 
@@ -1356,6 +1676,63 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["step"] = None
         await update.message.reply_text("Меню:", reply_markup=MENU)
         return
+
+    # REVIEW COMMENT
+    if step == "review_comment":
+        rating = user.get("review_rating")
+        order_id = user.get("review_order_id")
+        comment = text.strip()
+
+        if comment in ["-", "Без комментария", "без комментария"]:
+            comment = ""
+
+        if not rating or not order_id:
+            user["step"] = None
+            await update.message.reply_text(
+                "Не удалось сохранить отзыв: потеряны данные заказа.\n"
+                "Можете написать менеджеру, и мы добавим отзыв вручную.",
+                reply_markup=MENU,
+            )
+            return
+
+        review = create_review(
+            user_id=user_id,
+            user=user,
+            rating=int(rating),
+            comment=comment,
+        )
+
+        user["step"] = None
+        user.pop("review_rating", None)
+        user.pop("review_order_id", None)
+
+        if review:
+            await update.message.reply_text(
+                "✅ Спасибо за отзыв!\n\n"
+                "Он появится на странице отзывов после сохранения.",
+                reply_markup=MENU,
+            )
+
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=(
+                    "⭐ НОВЫЙ ОТЗЫВ\n\n"
+                    f"👤 Клиент: {user.get('client_name', 'Клиент')}\n"
+                    f"🧾 Заказ: {order_id}\n"
+                    f"🛣 Маршрут: {user.get('route', '—')}\n"
+                    f"⭐ Оценка: {rating}/5\n"
+                    f"💬 Отзыв: {comment or 'без комментария'}\n\n"
+                    f"🌐 Страница отзывов: {PUBLIC_REVIEWS_URL}"
+                ),
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Не удалось сохранить отзыв.\n"
+                "Проверьте подключение Supabase или таблицу reviews.",
+                reply_markup=MENU,
+            )
+        return
+
 
     # PARCEL REQUEST
     if step == "parcel_request":
@@ -1721,6 +2098,40 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     await query.answer()
+
+    # CLIENT REVIEW RATING
+    if data.startswith("review_rate_"):
+        parts = data.split("_", 4)
+
+        if len(parts) != 5:
+            await query.message.reply_text("❌ Не удалось обработать оценку.")
+            return
+
+        rating = int(parts[2])
+        client_id = int(parts[3])
+        order_id = parts[4]
+
+        if query.from_user.id != client_id:
+            await query.message.reply_text("❌ Это не ваш заказ.")
+            return
+
+        user = get_user(client_id)
+        order = fetch_order_by_order_id(order_id)
+
+        user["step"] = "review_comment"
+        user["review_rating"] = rating
+        user["review_order_id"] = order_id
+
+        if order and order.get("route"):
+            user["route"] = order.get("route")
+
+        await query.message.reply_text(
+            f"Спасибо! Оценка: {rating}/5.\n\n"
+            "Напишите короткий отзыв одним сообщением.\n"
+            "Если комментарий не нужен, отправьте «-».",
+            reply_markup=CONFIRM_KB,
+        )
+        return
 
     # ADMIN START REPLY TO CLIENT
     if data.startswith("reply_"):
@@ -2676,6 +3087,17 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+
+        if path in ["/reviews", "/reviews.html"]:
+            body = render_reviews_html().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
@@ -2734,7 +3156,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - LIVE LOCATION V4B STOP VERSION", flush=True)
+    print("BOT STARTED - REVIEWS V6 VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
