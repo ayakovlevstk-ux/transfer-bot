@@ -4,6 +4,7 @@ import threading
 import secrets
 import requests
 import html
+from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,7 +51,21 @@ BOT_TZ = ZoneInfo(BOT_TIMEZONE)
 REMINDER_CHECK_SECONDS = int(os.getenv("REMINDER_CHECK_SECONDS", "300"))
 LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "3600"))
 
-PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
+PUBLIC_PAYMENT_URL = os.getenv("PUBLIC_PAYMENT_URL", "https://transfer-bot-c5yn.onrender.com/pay")
+
+PAYMENT_BANK_RECEIVER = os.getenv("PAYMENT_BANK_RECEIVER", "")
+PAYMENT_BANK_NAME = os.getenv("PAYMENT_BANK_NAME", "Credo Bank")
+PAYMENT_BANK_GEL_IBAN = os.getenv("PAYMENT_BANK_GEL_IBAN", "")
+PAYMENT_BANK_USD_IBAN = os.getenv("PAYMENT_BANK_USD_IBAN", "")
+PAYMENT_BANK_EUR_IBAN = os.getenv("PAYMENT_BANK_EUR_IBAN", "")
+
+PAYMENT_RUB_RECEIVER = os.getenv("PAYMENT_RUB_RECEIVER", "Яковлев Андрей Русланович")
+PAYMENT_RUB_BANK = os.getenv("PAYMENT_RUB_BANK", "Яндекс Банк")
+PAYMENT_RUB_PHONE = os.getenv("PAYMENT_RUB_PHONE", "+7(950)493-96-63")
+
+PAYMENT_TG_WALLET = os.getenv("PAYMENT_TG_WALLET", "https://t.me/BatumiTransferBot")
+PAYMENT_CRYPTO_USDT_TRC20 = os.getenv("PAYMENT_CRYPTO_USDT_TRC20", "TH9BE3DhPCpoyGe93iQeMYhAbJWHptiH5y")
+PAYMENT_CRYPTO_USDT_TON = os.getenv("PAYMENT_CRYPTO_USDT_TON", "UQC3VjQS0-5Vpgkf29C583OKaz1GBHXxtLnYIro0cuG4QTzv")
 
 BASE_CURRENCY = "GEL"
 
@@ -903,7 +918,8 @@ def fetch_order_by_order_id(order_id: str):
     try:
         params = (
             f"?order_id=eq.{order_id}"
-            "&select=order_id,telegram_id,client_name,route,status,driver_live_chat_id,driver_live_message_id,"
+            "&select=order_id,telegram_id,client_name,route,seats,from_place,to_place,trip_date,pickup_datetime,"
+            "status,price_gel,deposit_gel,price_usd,price_eur,price_rub,driver_live_chat_id,driver_live_message_id,"
             "client_live_message_id,live_tracking_active"
             "&limit=1"
         )
@@ -1388,6 +1404,247 @@ def calculate_order_price(route: str, seats: int):
     }
 
 
+def money(value, currency: str) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        amount = 0
+
+    if currency == "RUB":
+        return f"{round(amount):,.0f} RUB".replace(",", " ")
+
+    return f"{amount:,.2f} {currency}".replace(",", " ")
+
+
+def payment_link_for_order(order_id: str) -> str:
+    base = PUBLIC_PAYMENT_URL.rstrip("/")
+    return f"{base}?order_id={order_id}"
+
+
+def safe_html(value) -> str:
+    return html.escape(str(value or ""))
+
+
+def format_payment_detail(value: str, fallback: str = "уточнит менеджер") -> str:
+    value = (value or "").strip()
+    return safe_html(value if value else fallback)
+
+
+def render_payment_html(order_id: str) -> str:
+    order = fetch_order_by_order_id(order_id)
+
+    if not order:
+        return """<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Оплата заказа</title>
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:#f5f5f5;color:#171717;margin:0}
+    .wrap{max-width:760px;margin:0 auto;padding:32px 16px}
+    .card{background:#fff;border-radius:22px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,.06)}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>Заказ не найден</h1>
+      <p>Проверьте ссылку или вернитесь в Telegram и запросите ссылку заново.</p>
+    </section>
+  </main>
+</body>
+</html>"""
+
+    deposit_gel = order.get("deposit_gel")
+
+    try:
+        deposit_gel = float(deposit_gel)
+    except (TypeError, ValueError):
+        price_gel = order.get("price_gel")
+        try:
+            deposit_gel = round(float(price_gel) * 0.5, 2)
+        except (TypeError, ValueError):
+            deposit_gel = 0
+
+    deposit_usd = convert_price(deposit_gel, "USD")
+    deposit_eur = convert_price(deposit_gel, "EUR")
+    deposit_rub = convert_price(deposit_gel, "RUB")
+
+    bot_button = ""
+    if PUBLIC_BOT_URL:
+        bot_button = f'<a class="button" href="{safe_html(PUBLIC_BOT_URL)}">Вернуться в Telegram</a>'
+
+    bank_receiver = format_payment_detail(PAYMENT_BANK_RECEIVER, "будет указан менеджером")
+    gel_iban = format_payment_detail(PAYMENT_BANK_GEL_IBAN, "будет добавлен после открытия счёта")
+    usd_iban = format_payment_detail(PAYMENT_BANK_USD_IBAN, "будет добавлен после открытия счёта")
+    eur_iban = format_payment_detail(PAYMENT_BANK_EUR_IBAN, "будет добавлен после открытия счёта")
+
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Оплата заказа №{safe_html(order_id)}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f5f5f5;
+      color: #171717;
+    }}
+    .wrap {{
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 28px 16px 48px;
+    }}
+    .hero {{
+      background: #111827;
+      color: white;
+      border-radius: 24px;
+      padding: 26px;
+      margin-bottom: 18px;
+    }}
+    .hero h1 {{
+      margin: 0 0 12px;
+      font-size: 30px;
+      line-height: 1.1;
+    }}
+    .hero p {{
+      margin: 6px 0;
+      color: #e5e7eb;
+      line-height: 1.45;
+    }}
+    .summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }}
+    .sum-card {{
+      background: rgba(255,255,255,.1);
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 16px;
+      padding: 14px;
+    }}
+    .sum-card .label {{
+      font-size: 13px;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+    }}
+    .sum-card .value {{
+      font-size: 20px;
+      font-weight: 800;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }}
+    .card {{
+      background: white;
+      border-radius: 22px;
+      padding: 22px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.06);
+    }}
+    .card h2 {{
+      margin: 0 0 14px;
+      font-size: 22px;
+    }}
+    .line {{
+      margin: 10px 0;
+      line-height: 1.45;
+    }}
+    .mono {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #f3f4f6;
+      border-radius: 10px;
+      padding: 10px;
+      overflow-wrap: anywhere;
+    }}
+    .warn {{
+      margin-top: 16px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #7c2d12;
+      border-radius: 16px;
+      padding: 14px;
+      line-height: 1.45;
+    }}
+    .button {{
+      display: inline-block;
+      margin-top: 16px;
+      padding: 13px 16px;
+      border-radius: 14px;
+      background: #22c55e;
+      color: #07130b;
+      font-weight: 800;
+      text-decoration: none;
+    }}
+    .footer {{
+      margin-top: 18px;
+      color: #6b7280;
+      text-align: center;
+      font-size: 13px;
+    }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Оплата заказа №{safe_html(order_id)}</h1>
+      <p>🛣 Маршрут: <strong>{safe_html(order.get("route") or "не указан")}</strong></p>
+      <p>👥 Мест: <strong>{safe_html(order.get("seats") or "—")}</strong></p>
+      <p>📅 Дата: <strong>{safe_html(order.get("trip_date") or "—")}</strong></p>
+      <p>После оплаты вернитесь в Telegram и нажмите «💳 Я оплатил». Менеджер проверит оплату и закрепит место.</p>
+      {bot_button}
+
+      <div class="summary">
+        <div class="sum-card"><div class="label">Предоплата GEL</div><div class="value">{money(deposit_gel, "GEL")}</div></div>
+        <div class="sum-card"><div class="label">USD</div><div class="value">{money(deposit_usd, "USD")}</div></div>
+        <div class="sum-card"><div class="label">EUR</div><div class="value">{money(deposit_eur, "EUR")}</div></div>
+        <div class="sum-card"><div class="label">RUB</div><div class="value">{money(deposit_rub, "RUB")}</div></div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>🇬🇪 GEL / USD / EUR</h2>
+        <div class="line"><strong>Банк:</strong> {format_payment_detail(PAYMENT_BANK_NAME, "Credo Bank")}</div>
+        <div class="line"><strong>Получатель:</strong> {bank_receiver}</div>
+        <div class="line"><strong>IBAN GEL:</strong><div class="mono">{gel_iban}</div></div>
+        <div class="line"><strong>IBAN USD:</strong><div class="mono">{usd_iban}</div></div>
+        <div class="line"><strong>IBAN EUR:</strong><div class="mono">{eur_iban}</div></div>
+        <div class="line"><strong>Назначение:</strong><div class="mono">Order {safe_html(order_id)}</div></div>
+        <div class="warn">Грузинский банк пока в подготовке. Если реквизиты ещё не указаны, запросите их у менеджера в Telegram.</div>
+      </article>
+
+      <article class="card">
+        <h2>🇷🇺 RUB через СБП</h2>
+        <div class="line"><strong>Сумма:</strong> {money(deposit_rub, "RUB")}</div>
+        <div class="line"><strong>Получатель:</strong> {format_payment_detail(PAYMENT_RUB_RECEIVER)}</div>
+        <div class="line"><strong>Банк:</strong> {format_payment_detail(PAYMENT_RUB_BANK)}</div>
+        <div class="line"><strong>Телефон СБП:</strong><div class="mono">{format_payment_detail(PAYMENT_RUB_PHONE)}</div></div>
+        <div class="line"><strong>Комментарий:</strong><div class="mono">Order {safe_html(order_id)}</div></div>
+        <div class="warn">Обязательно укажите номер заказа в комментарии, иначе оплату придётся искать вручную.</div>
+      </article>
+
+      <article class="card">
+        <h2>₿ Telegram Wallet / Crypto</h2>
+        <div class="line"><strong>Telegram Wallet:</strong><div class="mono">{format_payment_detail(PAYMENT_TG_WALLET)}</div></div>
+        <div class="line"><strong>USDT TRC20:</strong><div class="mono">{format_payment_detail(PAYMENT_CRYPTO_USDT_TRC20)}</div></div>
+        <div class="line"><strong>USDT TON:</strong><div class="mono">{format_payment_detail(PAYMENT_CRYPTO_USDT_TON)}</div></div>
+        <div class="line"><strong>Комментарий / memo:</strong><div class="mono">Order {safe_html(order_id)}</div></div>
+        <div class="warn">Внимательно выбирайте сеть. USDT TRC20 отправлять только в TRON/TRC20. USDT TON отправлять только в TON. При ошибке сети платёж может быть потерян.</div>
+      </article>
+    </section>
+
+    <div class="footer">Оплата подтверждается менеджером вручную после нажатия кнопки «Я оплатил» в Telegram.</div>
+  </main>
+</body>
+</html>"""
+
+
 def price_summary(price_data: dict) -> str:
     if not price_data or price_data.get("total") is None:
         return "💰 Цена: по запросу"
@@ -1427,7 +1684,7 @@ async def send_price_to_client(client_id: int, context: ContextTypes.DEFAULT_TYP
         notes="Цена отправлена клиенту, ожидается предоплата",
     )
 
-    payment_link = PAYMENT_BASE_URL + str(client_id) + f"&amount={deposit}"
+    payment_link = payment_link_for_order(user.get("order_id", ""))
 
     await context.bot.send_message(
         chat_id=client_id,
@@ -3098,6 +3355,17 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path in ["/pay", "/pay.html"]:
+            query = parse_qs(urlparse(self.path).query)
+            order_id = (query.get("order_id") or [""])[0]
+            body = render_payment_html(order_id).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
@@ -3156,7 +3424,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - REVIEWS V6 VERSION", flush=True)
+    print("BOT STARTED - PAYMENT PAGE V7 VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
