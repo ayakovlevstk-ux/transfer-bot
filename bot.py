@@ -2,6 +2,7 @@ import os
 import asyncio
 import threading
 import secrets
+import requests
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -30,6 +31,11 @@ if not TOKEN:
 ADMIN_IDS = {8308540295}
 ADMIN_CHAT_ID = -1003903294475
 
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_TABLE_NAME = os.getenv("SUPABASE_TABLE_NAME", "orders")
+SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_TABLE_NAME)
+
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
 BASE_CURRENCY = "GEL"
@@ -43,23 +49,13 @@ EXCHANGE_RATES = {
 
 ROUTE_PRICES_GEL = {
     "Батуми ↔ Сарпи": 35,
-    "Батуми ↔ Кобулети": 50,
-    "Батуми ↔ Уреки": 70,
-    "Батуми ↔ Кутаиси": 140,
-    "Батуми ↔ Боржоми": 210,
-    "Батуми ↔ Бакуриани": 240,
-    "Батуми ↔ Гудаури": 300,
-    "Батуми ↔ Казбеги": 320,
-    "Батуми ↔ Сигнахи": 330,
+    "Батуми ↔ Тбилиси": 250,
     "Батуми ↔ Владикавказ": 350,
-    "Батуми ↔ Ереван": 420,
 }
 
 REQUEST_PRICE_ROUTES = {
-    "Батуми ↔ Баку",
-    "Другое направление",
+    "✍️ Свой маршрут",
 }
-
 DISCOUNT_SEATS_FROM = 4
 DISCOUNT_PERCENT = 5
 
@@ -67,6 +63,268 @@ DISCOUNT_PERCENT = 5
 # =========================
 # HELPERS
 # =========================
+
+
+STATUS_LABELS = {
+    "waiting_admin": "⏳ ожидает подтверждения админа",
+    "waiting": "⏳ ожидает подтверждения админа",
+    "awaiting_deposit": "💳 ожидает предоплату",
+    "awaiting_payment": "💳 ожидает предоплату",
+    "payment_check": "🔎 оплата на проверке",
+    "reserved": "✅ забронирован",
+    "driver_assigned": "👨‍✈️ водитель назначен",
+    "driver_on_way": "🚗 водитель едет к вам",
+    "driver_arrived": "📍 водитель на месте",
+    "passenger_picked": "👥 пассажир в машине",
+    "in_progress": "🛣 рейс в пути",
+    "completed": "🏁 завершён",
+    "cancelled": "❌ отменён",
+    "rejected": "❌ отклонён",
+    "expired": "⏳ бронь истекла",
+}
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status or "", status or "не указан")
+
+
+def supabase_headers(prefer: str = None) -> dict:
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    if prefer:
+        headers["Prefer"] = prefer
+
+    return headers
+
+
+def supabase_table_url(params: str = "") -> str:
+    return f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE_NAME}{params}"
+
+
+def safe_float(value):
+    if value in ["", None]:
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def order_payload(user_id: int, user: dict, status: str = None, notes: str = None) -> dict:
+    if status:
+        user["status"] = status
+
+    if notes:
+        user["notes"] = notes
+
+    payload = {
+        "updated_at": now_iso(),
+        "order_id": str(user.get("order_id", "")),
+        "telegram_id": str(user_id),
+        "client_name": str(user.get("client_name", "Клиент")),
+        "client_url": str(user.get("client_url", "")),
+        "route": str(user.get("route", "")),
+        "seats": int(user.get("seats")) if str(user.get("seats", "")).isdigit() else None,
+        "from_place": str(user.get("from", "")),
+        "to_place": str(user.get("to", "")),
+        "trip_date": str(user.get("date", "")),
+        "comment": str(user.get("comment", "")),
+        "status": str(user.get("status", "")),
+        "price_gel": safe_float(user.get("price_gel") or user.get("total_price_gel")),
+        "deposit_gel": safe_float(user.get("deposit_gel")),
+        "price_usd": safe_float(user.get("price_usd")),
+        "price_eur": safe_float(user.get("price_eur")),
+        "price_rub": safe_float(user.get("price_rub")),
+        "notes": str(user.get("notes", "")),
+        "driver_name": str(user.get("driver_name", "")),
+        "driver_phone": str(user.get("driver_phone", "")),
+        "driver_lat": safe_float(user.get("driver_lat")),
+        "driver_lng": safe_float(user.get("driver_lng")),
+    }
+
+    if user.get("status") == "completed":
+        payload["completed_at"] = now_iso()
+
+    if user.get("status") in ["cancelled", "rejected"]:
+        payload["cancelled_at"] = now_iso()
+
+    return {
+        key: value
+        for key, value in payload.items()
+        if value not in [None, ""]
+    }
+
+
+def save_order(user_id: int, user: dict, status: str = None, notes: str = None):
+    if not SUPABASE_ENABLED:
+        print("SUPABASE DISABLED: order not saved", flush=True)
+        return None
+
+    payload = order_payload(user_id, user, status=status, notes=notes)
+
+    if not payload.get("order_id"):
+        print("SUPABASE SAVE SKIPPED: no order_id", flush=True)
+        return None
+
+    try:
+        response = requests.post(
+            supabase_table_url("?on_conflict=order_id"),
+            headers=supabase_headers("resolution=merge-duplicates,return=representation"),
+            json=payload,
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE SAVE ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        print(
+            f"SUPABASE SAVED ORDER {payload.get('order_id')} -> {payload.get('status')}",
+            flush=True,
+        )
+        return data
+
+    except Exception as exc:
+        print(f"SUPABASE SAVE EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_user_orders(user_id: int, limit: int = 10):
+    if not SUPABASE_ENABLED:
+        return None
+
+    try:
+        params = (
+            f"?telegram_id=eq.{user_id}"
+            "&select=order_id,status,route,seats,from_place,to_place,trip_date,comment,"
+            "price_gel,deposit_gel,driver_name,driver_phone,updated_at,created_at"
+            "&order=created_at.desc"
+            f"&limit={limit}"
+        )
+
+        response = requests.get(
+            supabase_table_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return []
+
+        return response.json()
+
+    except Exception as exc:
+        print(f"SUPABASE FETCH EXCEPTION: {exc}", flush=True)
+        return []
+
+
+def format_order_card(order: dict) -> str:
+    price = order.get("price_gel")
+    price_text = f"{price:g} GEL" if isinstance(price, (int, float)) else "по запросу"
+
+    return (
+        f"🧾 Заказ: {order.get('order_id', '—')}\n"
+        f"📊 Статус: {status_label(order.get('status'))}\n"
+        f"🛣 Направление: {order.get('route', '—')}\n"
+        f"👥 Мест: {order.get('seats', '—')}\n"
+        f"📍 Откуда: {order.get('from_place', '—')}\n"
+        f"🏁 Куда: {order.get('to_place', '—')}\n"
+        f"📅 Дата: {order.get('trip_date', '—')}\n"
+        f"💰 Цена: {price_text}"
+    )
+
+
+def format_my_orders(orders: list) -> str:
+    if orders is None:
+        return (
+            "📋 История заказов пока не подключена.\n\n"
+            "Нужно задать SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY и SUPABASE_TABLE_NAME в Render."
+        )
+
+    if not orders:
+        return "📋 У вас пока нет заказов."
+
+    cards = [format_order_card(order) for order in orders]
+    return "📋 Ваши заказы:\n\n" + "\n\n────────────\n\n".join(cards)
+
+
+def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🚗 Выехал", callback_data=f"st_onway_{client_id}"),
+                InlineKeyboardButton("📍 На месте", callback_data=f"st_arrived_{client_id}"),
+            ],
+            [
+                InlineKeyboardButton("👥 Клиент сел", callback_data=f"st_picked_{client_id}"),
+                InlineKeyboardButton("🛣 В пути", callback_data=f"st_progress_{client_id}"),
+            ],
+            [
+                InlineKeyboardButton("🏁 Завершить", callback_data=f"st_done_{client_id}"),
+                InlineKeyboardButton("❌ Отменить", callback_data=f"st_cancel_{client_id}"),
+            ],
+            [
+                InlineKeyboardButton("✉️ Ответить клиенту", callback_data=f"reply_{client_id}"),
+            ],
+        ]
+    )
+
+
+async def set_trip_status(client_id: int, status: str, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(client_id)
+    user["status"] = status
+
+    save_order(
+        user_id=client_id,
+        user=user,
+        status=status,
+        notes=f"Статус изменён администратором: {status}",
+    )
+
+    client_messages = {
+        "driver_on_way": (
+            "🚗 Водитель выехал к вам.\n\n"
+            "Статус поездки можно смотреть в разделе «📋 Мои заказы»."
+        ),
+        "driver_arrived": (
+            "📍 Водитель на месте.\n\n"
+            "Пожалуйста, выходите к машине."
+        ),
+        "passenger_picked": (
+            "👥 Посадка подтверждена.\n\n"
+            "Хорошей поездки!"
+        ),
+        "in_progress": (
+            "🛣 Рейс начался.\n\n"
+            "Статус поездки можно смотреть в разделе «📋 Мои заказы»."
+        ),
+        "completed": (
+            "🏁 Рейс завершён.\n\n"
+            "Спасибо, что выбрали нас!"
+        ),
+        "cancelled": (
+            "❌ Рейс отменён.\n\n"
+            "Если это ошибка, свяжитесь с менеджером."
+        ),
+    }
+
+    await context.bot.send_message(
+        chat_id=client_id,
+        text=client_messages.get(status, f"📊 Статус заказа обновлён: {status_label(status)}"),
+    )
+
+
 
 def generate_order_id() -> str:
     for _ in range(30):
@@ -194,6 +452,13 @@ async def send_price_to_client(client_id: int, context: ContextTypes.DEFAULT_TYP
     user["price_eur"] = convert_price(price, "EUR")
     user["price_rub"] = convert_price(price, "RUB")
 
+    save_order(
+        user_id=client_id,
+        user=user,
+        status="awaiting_deposit",
+        notes="Цена отправлена клиенту, ожидается предоплата",
+    )
+
     payment_link = PAYMENT_BASE_URL + str(client_id) + f"&amount={deposit}"
 
     await context.bot.send_message(
@@ -226,7 +491,7 @@ MENU = ReplyKeyboardMarkup(
     [
         ["🚕 Заказать трансфер"],
         ["💰 Цены", "📦 Посылка"],
-        ["❓ Помощь"],
+        ["📋 Мои заказы", "❓ Помощь"],
     ],
     resize_keyboard=True,
 )
@@ -249,13 +514,10 @@ COMMENT_KB = ReplyKeyboardMarkup(
 
 ROUTE_KB = ReplyKeyboardMarkup(
     [
-        ["Батуми ↔ Сарпи", "Батуми ↔ Кобулети"],
-        ["Батуми ↔ Уреки", "Батуми ↔ Кутаиси"],
-        ["Батуми ↔ Боржоми", "Батуми ↔ Бакуриани"],
-        ["Батуми ↔ Гудаури", "Батуми ↔ Казбеги"],
-        ["Батуми ↔ Сигнахи", "Батуми ↔ Владикавказ"],
-        ["Батуми ↔ Ереван", "Батуми ↔ Баку"],
-        ["Другое направление"],
+        ["Батуми ↔ Владикавказ"],
+        ["Батуми ↔ Тбилиси"],
+        ["Батуми ↔ Сарпи"],
+        ["✍️ Свой маршрут"],
         ["⬅️ Назад"],
     ],
     resize_keyboard=True,
@@ -334,22 +596,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "💰 Цены":
         await update.message.reply_text(
             "💰 Цены за 1 место:\n\n"
-            "Батуми ↔ Сарпи — 35 GEL\n"
-            "Батуми ↔ Кобулети — 50 GEL\n"
-            "Батуми ↔ Уреки — 70 GEL\n"
-            "Батуми ↔ Кутаиси — 140 GEL\n"
-            "Батуми ↔ Боржоми — 210 GEL\n"
-            "Батуми ↔ Бакуриани — 240 GEL\n"
-            "Батуми ↔ Гудаури — 300 GEL\n"
-            "Батуми ↔ Казбеги — 320 GEL\n"
-            "Батуми ↔ Сигнахи — 330 GEL\n"
             "Батуми ↔ Владикавказ — 350 GEL\n"
-            "Батуми ↔ Ереван — 420 GEL\n"
-            "Батуми ↔ Баку — по запросу\n\n"
+            "Батуми ↔ Тбилиси — 250 GEL\n"
+            "Батуми ↔ Сарпи — 35 GEL\n\n"
             "🎁 При заказе от 4 мест — скидка 5%.\n"
             "Цена указана за 1 пассажирское место.\n"
             "Обратное направление считается по тому же тарифу.\n"
-            "Если нужного направления нет в списке, выберите «Другое направление» при заказе.\n"
+            "Если нужного направления нет в списке, выберите «✍️ Свой маршрут» при заказе.\n"
             "Финальная цена зависит от даты, багажа, ожидания и пограничных условий."
         )
         return
@@ -369,6 +622,14 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• когда нужно передать.\n\n"
             "Я передам заявку менеджеру.",
             reply_markup=CONFIRM_KB,
+        )
+        return
+
+    if text == "📋 Мои заказы":
+        orders = fetch_user_orders(user_id, limit=10)
+        await update.message.reply_text(
+            format_my_orders(orders),
+            reply_markup=MENU,
         )
         return
 
@@ -530,7 +791,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if step == "route":
         route = text.strip()
 
-        if route == "Другое направление":
+        if route == "✍️ Свой маршрут":
             user["step"] = "custom_route"
             await update.message.reply_text(
                 "Напишите свой маршрут одним сообщением.\n\n"
@@ -538,14 +799,14 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Батуми → Трабзон\n"
                 "Кобулети → Владикавказ\n"
                 "Аэропорт Кутаиси → Батуми\n\n"
-                "Цена по нестандартному маршруту будет рассчитана менеджером.",
+                "Цена по своему маршруту будет рассчитана менеджером.",
                 reply_markup=CONFIRM_KB,
             )
             return
 
         if route not in ROUTE_PRICES_GEL and route not in REQUEST_PRICE_ROUTES:
             await update.message.reply_text(
-                "Выберите направление кнопкой ниже или нажмите «Другое направление».",
+                "Выберите направление кнопкой ниже или нажмите «✍️ Свой маршрут».",
                 reply_markup=ROUTE_KB,
             )
             return
@@ -662,7 +923,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if text == "✅ Подтвердить":
-            user["status"] = "waiting"
+            user["status"] = "waiting_admin"
 
             keyboard = InlineKeyboardMarkup(
                 [
@@ -704,6 +965,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=ADMIN_CHAT_ID,
                 text=order_text,
                 reply_markup=keyboard,
+            )
+
+            save_order(
+                user_id=user_id,
+                user=user,
+                status="waiting_admin",
+                notes="Клиент подтвердил заявку, ожидается решение админа",
             )
 
             await update.message.reply_text(
@@ -838,6 +1106,32 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # ADMIN UPDATE TRIP STATUS
+    status_callbacks = {
+        "st_onway_": "driver_on_way",
+        "st_arrived_": "driver_arrived",
+        "st_picked_": "passenger_picked",
+        "st_progress_": "in_progress",
+        "st_done_": "completed",
+        "st_cancel_": "cancelled",
+    }
+
+    for prefix, new_status in status_callbacks.items():
+        if data.startswith(prefix):
+            if query.from_user.id not in ADMIN_IDS:
+                await query.message.reply_text("❌ Нет доступа")
+                return
+
+            client_id = int(data.replace(prefix, ""))
+            await set_trip_status(client_id, new_status, context)
+
+            await query.message.edit_text(
+                "📊 Статус рейса обновлён.\n\n"
+                f"Новый статус: {status_label(new_status)}",
+                reply_markup=status_admin_keyboard(client_id),
+            )
+            return
+
     # CLIENT PAID → SEND PAYMENT CHECK TO ADMIN
     if data == "paid":
         client_id = query.from_user.id
@@ -855,6 +1149,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         user["status"] = "payment_check"
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="payment_check",
+            notes="Клиент нажал кнопку Я оплатил",
+        )
 
         keyboard = InlineKeyboardMarkup(
             [
@@ -918,6 +1219,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user["status"] = "reserved"
 
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="reserved",
+            notes="Оплата подтверждена администратором",
+        )
+
         if user.get("timer_task"):
             user["timer_task"].cancel()
             user["timer_task"] = None
@@ -932,7 +1240,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await query.message.edit_text(
-            "✅ Оплата подтверждена. Место закреплено за клиентом."
+            "✅ Оплата подтверждена. Место закреплено за клиентом.\n\n"
+            "Дальше можно менять статус рейса кнопками ниже.",
+            reply_markup=status_admin_keyboard(client_id),
         )
 
         return
@@ -951,6 +1261,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         user["status"] = "awaiting_deposit"
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="awaiting_deposit",
+            notes="Администратор отклонил подтверждение оплаты",
+        )
 
         await context.bot.send_message(
             chat_id=client_id,
@@ -977,6 +1294,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = get_user(client_id)
 
         user["status"] = "awaiting_deposit"
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="awaiting_deposit",
+            notes="Заявка подтверждена администратором",
+        )
 
         await context.bot.send_message(
             chat_id=client_id,
@@ -1018,6 +1342,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = get_user(client_id)
 
         user["status"] = "rejected"
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="rejected",
+            notes="Заявка отклонена администратором",
+        )
 
         if user.get("timer_task"):
             user["timer_task"].cancel()
@@ -1097,6 +1428,13 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     user["total_price_gel"] = price
 
+    save_order(
+        user_id=client_id,
+        user=user,
+        status="awaiting_deposit",
+        notes="Цена введена вручную администратором",
+    )
+
     context.user_data.pop("price_for", None)
 
     await update.message.reply_text(
@@ -1118,8 +1456,15 @@ async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     # проверяем: человек НЕ оплатил
     if user["status"] in ["awaiting_deposit", "payment_check"]:
-        user["status"] = None
+        user["status"] = "expired"
         user["timer_task"] = None
+
+        save_order(
+            user_id=client_id,
+            user=user,
+            status="expired",
+            notes="Время оплаты истекло",
+        )
 
         await context.bot.send_message(
             chat_id=client_id,
@@ -1168,6 +1513,11 @@ def main():
         daemon=True,
     ).start()
 
+    if SUPABASE_ENABLED:
+        print("SUPABASE ENABLED", flush=True)
+    else:
+        print("SUPABASE DISABLED: My Orders history will not persist", flush=True)
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -1184,7 +1534,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - PARCEL CONFIRM VERSION", flush=True)
+    print("BOT STARTED - MY ORDERS V1 VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
