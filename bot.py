@@ -42,7 +42,7 @@ BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tbilisi")
 BOT_TZ = ZoneInfo(BOT_TIMEZONE)
 
 REMINDER_CHECK_SECONDS = int(os.getenv("REMINDER_CHECK_SECONDS", "300"))
-LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "28800"))
+LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "3600"))
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
@@ -496,6 +496,7 @@ def order_payload(user_id: int, user: dict, status: str = None, notes: str = Non
         "live_tracking_active": bool(user.get("live_tracking_active", False)),
         "live_started_at": str(user.get("live_started_at", "")),
         "live_until": str(user.get("live_until", "")),
+        "live_stopped_at": str(user.get("live_stopped_at", "")),
         "driver_live_chat_id": str(user.get("driver_live_chat_id", "")),
         "driver_live_message_id": int(user.get("driver_live_message_id")) if str(user.get("driver_live_message_id", "")).isdigit() else None,
         "client_live_message_id": int(user.get("client_live_message_id")) if str(user.get("client_live_message_id", "")).isdigit() else None,
@@ -571,6 +572,39 @@ def patch_order_fields(order_id: str, fields: dict):
 
     except Exception as exc:
         print(f"SUPABASE PATCH EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_order_by_order_id(order_id: str):
+    if not SUPABASE_ENABLED or not order_id:
+        return None
+
+    try:
+        params = (
+            f"?order_id=eq.{order_id}"
+            "&select=order_id,telegram_id,status,driver_live_chat_id,driver_live_message_id,"
+            "client_live_message_id,live_tracking_active"
+            "&limit=1"
+        )
+
+        response = requests.get(
+            supabase_table_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE ORDER FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        if data:
+            return data[0]
+
+        return None
+
+    except Exception as exc:
+        print(f"SUPABASE ORDER FETCH EXCEPTION: {exc}", flush=True)
         return None
 
 
@@ -786,6 +820,59 @@ def format_my_orders(orders: list) -> str:
     return "📋 Ваши заказы:\n\n" + "\n\n────────────\n\n".join(cards)
 
 
+async def stop_live_tracking(client_id: int, context: ContextTypes.DEFAULT_TYPE, reason: str = ""):
+    user = get_user(client_id)
+    order_id = user.get("order_id")
+    order = fetch_order_by_order_id(order_id) if order_id else None
+
+    client_live_message_id = (
+        user.get("client_live_message_id")
+        or (order or {}).get("client_live_message_id")
+    )
+
+    driver_live_chat_id = (
+        user.get("driver_live_chat_id")
+        or (order or {}).get("driver_live_chat_id")
+    )
+
+    driver_live_message_id = (
+        user.get("driver_live_message_id")
+        or (order or {}).get("driver_live_message_id")
+    )
+
+    # Stop the live map shown to the client.
+    if client_live_message_id:
+        try:
+            await context.bot.stop_message_live_location(
+                chat_id=client_id,
+                message_id=int(client_live_message_id),
+            )
+        except Exception as exc:
+            print(f"STOP CLIENT LIVE LOCATION ERROR: {exc}", flush=True)
+
+    # Remove in-memory session so further driver live updates don't reactivate the order.
+    if driver_live_chat_id and driver_live_message_id:
+        session_key = live_session_key(driver_live_chat_id, driver_live_message_id)
+        context.application.bot_data.setdefault("live_sessions", {}).pop(session_key, None)
+
+    user["live_tracking_active"] = False
+    user["live_stopped_at"] = now_iso()
+
+    if order_id:
+        patch_order_fields(
+            order_id,
+            {
+                "live_tracking_active": False,
+                "live_stopped_at": user["live_stopped_at"],
+            },
+        )
+
+    print(
+        f"LIVE TRACKING STOPPED client_id={client_id} order_id={order_id} reason={reason}",
+        flush=True,
+    )
+
+
 def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -802,7 +889,10 @@ def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("❌ Отменить", callback_data=f"st_cancel_{client_id}"),
             ],
             [
-                InlineKeyboardButton("📡 Live - трекинг", callback_data=f"live_{client_id}"),
+                InlineKeyboardButton("📡 Live-трекинг", callback_data=f"live_{client_id}"),
+                InlineKeyboardButton("⛔ Стоп live", callback_data=f"live_stop_{client_id}"),
+            ],
+            [
                 InlineKeyboardButton("📍 Геометка", callback_data=f"geo_{client_id}"),
             ],
             [
@@ -815,6 +905,9 @@ def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
 async def set_trip_status(client_id: int, status: str, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(client_id)
     user["status"] = status
+
+    if status in ["completed", "cancelled", "rejected", "expired"]:
+        await stop_live_tracking(client_id, context, reason=f"terminal_status:{status}")
 
     save_order(
         user_id=client_id,
@@ -1663,6 +1756,21 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # ADMIN STOP LIVE TRACKING
+    if data.startswith("live_stop_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("live_stop_", ""))
+        await stop_live_tracking(client_id, context, reason="admin_button")
+
+        await query.message.reply_text(
+            "⛔ Live-отслеживание остановлено.",
+            reply_markup=status_admin_keyboard(client_id),
+        )
+        return
+
     # ADMIN START LIVE TRACKING INPUT
     if data.startswith("live_"):
         if query.from_user.id not in ADMIN_IDS:
@@ -2129,6 +2237,11 @@ async def admin_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session:
         client_id = int(session["client_id"])
         user = get_user(client_id)
+
+        if user.get("status") in ["completed", "cancelled", "rejected", "expired"]:
+            await stop_live_tracking(client_id, context, reason=f"ignored_live_update_after:{user.get('status')}")
+            raise ApplicationHandlerStop
+
         user["driver_lat"] = location.latitude
         user["driver_lng"] = location.longitude
         user["driver_location_updated_at"] = now_iso()
@@ -2454,7 +2567,7 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(600)  # 1 час, для теста можно поставить 600
+    await asyncio.sleep(3600)  # 1 час, для теста можно поставить 600
 
     user = get_user(client_id)
 
@@ -2544,7 +2657,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - LIVE LOCATION V4A VERSION", flush=True)
+    print("BOT STARTED - LIVE LOCATION V4B STOP VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
