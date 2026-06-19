@@ -34,6 +34,7 @@ ADMIN_CHAT_ID = -1003903294475
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_TABLE_NAME = os.getenv("SUPABASE_TABLE_NAME", "orders")
+SUPABASE_DRIVERS_TABLE_NAME = os.getenv("SUPABASE_DRIVERS_TABLE_NAME", "drivers")
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_TABLE_NAME)
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
@@ -109,6 +110,221 @@ def supabase_table_url(params: str = "") -> str:
     return f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE_NAME}{params}"
 
 
+def supabase_drivers_url(params: str = "") -> str:
+    return f"{SUPABASE_URL}/rest/v1/{SUPABASE_DRIVERS_TABLE_NAME}{params}"
+
+
+def parse_driver_card_text(text: str) -> dict:
+    raw = text.strip()
+
+    if ";" in raw:
+        parts = [part.strip() for part in raw.split(";") if part.strip()]
+    else:
+        parts = [line.strip() for line in raw.splitlines() if line.strip()]
+
+    while len(parts) < 5:
+        parts.append("")
+
+    name, phone, car_model, car_color, plate = parts[:5]
+    notes = "\n".join(parts[5:]).strip()
+
+    if not name:
+        name = "Водитель"
+
+    return {
+        "name": name,
+        "phone": phone,
+        "car_model": car_model,
+        "car_color": car_color,
+        "plate": plate,
+        "notes": notes,
+        "active": True,
+    }
+
+
+def driver_info_from_card(driver: dict) -> str:
+    name = driver.get("name") or "Водитель"
+    phone = driver.get("phone") or "телефон уточняется"
+    car_model = driver.get("car_model") or "авто уточняется"
+    car_color = driver.get("car_color") or ""
+    plate = driver.get("plate") or ""
+    notes = driver.get("notes") or ""
+
+    car_line = ", ".join(part for part in [car_model, car_color, plate] if part)
+
+    lines = [
+        f"👨‍✈️ {name}",
+        f"📞 {phone}",
+        f"🚘 {car_line}" if car_line else "🚘 Авто уточняется",
+    ]
+
+    if notes:
+        lines.append(f"ℹ️ {notes}")
+
+    return "\n".join(lines)
+
+
+def format_driver_card(driver: dict) -> str:
+    driver_id = driver.get("id", "—")
+    return (
+        f"👨‍✈️ Карточка водителя #{driver_id}\n\n"
+        f"{driver_info_from_card(driver)}"
+    )
+
+
+def create_driver_card(admin_id: int, text: str):
+    if not SUPABASE_ENABLED:
+        print("SUPABASE DISABLED: driver not saved", flush=True)
+        return None
+
+    payload = parse_driver_card_text(text)
+    payload["created_by"] = str(admin_id)
+    payload["updated_at"] = now_iso()
+
+    try:
+        response = requests.post(
+            supabase_drivers_url(),
+            headers=supabase_headers("return=representation"),
+            json=payload,
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE DRIVER CREATE ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        if isinstance(data, list) and data:
+            return data[0]
+
+        return None
+
+    except Exception as exc:
+        print(f"SUPABASE DRIVER CREATE EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def fetch_drivers(limit: int = 20):
+    if not SUPABASE_ENABLED:
+        return None
+
+    try:
+        params = (
+            "?active=eq.true"
+            "&select=id,name,phone,car_model,car_color,plate,notes,active,created_at,updated_at"
+            "&order=created_at.desc"
+            f"&limit={limit}"
+        )
+
+        response = requests.get(
+            supabase_drivers_url(params),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE DRIVERS FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return []
+
+        return response.json()
+
+    except Exception as exc:
+        print(f"SUPABASE DRIVERS FETCH EXCEPTION: {exc}", flush=True)
+        return []
+
+
+def fetch_driver(driver_id: int):
+    if not SUPABASE_ENABLED:
+        return None
+
+    try:
+        response = requests.get(
+            supabase_drivers_url(f"?id=eq.{driver_id}&select=id,name,phone,car_model,car_color,plate,notes,active&limit=1"),
+            headers=supabase_headers(),
+            timeout=12,
+        )
+
+        if response.status_code >= 400:
+            print(f"SUPABASE DRIVER FETCH ERROR {response.status_code}: {response.text}", flush=True)
+            return None
+
+        data = response.json()
+        if data:
+            return data[0]
+
+        return None
+
+    except Exception as exc:
+        print(f"SUPABASE DRIVER FETCH EXCEPTION: {exc}", flush=True)
+        return None
+
+
+def driver_select_keyboard(client_id: int) -> InlineKeyboardMarkup:
+    drivers = fetch_drivers() or []
+    rows = []
+
+    for driver in drivers[:10]:
+        label = f"👨‍✈️ {driver.get('name', 'Водитель')} — {driver.get('car_model', 'авто')}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label[:60],
+                    callback_data=f"driver_pick_{client_id}_{driver.get('id')}",
+                )
+            ]
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "➕ Создать водителя",
+                callback_data=f"driver_add_for_{client_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "✍️ Ввести вручную",
+                callback_data=f"driver_manual_{client_id}",
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(rows)
+
+
+async def show_driver_selection(message, client_id: int):
+    drivers = fetch_drivers()
+
+    if drivers is None:
+        await message.reply_text(
+            "❌ База водителей не подключена.\n\n"
+            "Проверьте Supabase-переменные в Render."
+        )
+        return
+
+    if not drivers:
+        await message.reply_text(
+            "Пока нет карточек водителей.\n\n"
+            "Создайте водителя или введите данные вручную.",
+            reply_markup=driver_select_keyboard(client_id),
+        )
+        return
+
+    await message.reply_text(
+        "Выберите водителя для рейса или создайте новую карточку:",
+        reply_markup=driver_select_keyboard(client_id),
+    )
+
+
+def assign_driver_to_user(user: dict, driver: dict):
+    user["driver_id"] = driver.get("id")
+    user["driver_name"] = driver.get("name", "")
+    user["driver_phone"] = driver.get("phone", "")
+    user["driver_info"] = driver_info_from_card(driver)
+
+
 def safe_float(value):
     if value in ["", None]:
         return None
@@ -147,6 +363,8 @@ def order_payload(user_id: int, user: dict, status: str = None, notes: str = Non
         "notes": str(user.get("notes", "")),
         "driver_name": str(user.get("driver_name", "")),
         "driver_phone": str(user.get("driver_phone", "")),
+        "driver_info": str(user.get("driver_info", "")),
+        "driver_id": safe_float(user.get("driver_id")),
         "driver_lat": safe_float(user.get("driver_lat")),
         "driver_lng": safe_float(user.get("driver_lng")),
     }
@@ -207,7 +425,7 @@ def fetch_user_orders(user_id: int, limit: int = 10):
         params = (
             f"?telegram_id=eq.{user_id}"
             "&select=order_id,status,route,seats,from_place,to_place,trip_date,comment,"
-            "price_gel,deposit_gel,driver_name,driver_phone,updated_at,created_at"
+            "price_gel,deposit_gel,driver_name,driver_phone,driver_info,driver_id,updated_at,created_at"
             "&order=created_at.desc"
             f"&limit={limit}"
         )
@@ -233,16 +451,22 @@ def format_order_card(order: dict) -> str:
     price = order.get("price_gel")
     price_text = f"{price:g} GEL" if isinstance(price, (int, float)) else "по запросу"
 
-    return (
-        f"🧾 Заказ: {order.get('order_id', '—')}\n"
-        f"📊 Статус: {status_label(order.get('status'))}\n"
-        f"🛣 Направление: {order.get('route', '—')}\n"
-        f"👥 Мест: {order.get('seats', '—')}\n"
-        f"📍 Откуда: {order.get('from_place', '—')}\n"
-        f"🏁 Куда: {order.get('to_place', '—')}\n"
-        f"📅 Дата: {order.get('trip_date', '—')}\n"
-        f"💰 Цена: {price_text}"
-    )
+    lines = [
+        f"🧾 Заказ: {order.get('order_id', '—')}",
+        f"📊 Статус: {status_label(order.get('status'))}",
+        f"🛣 Направление: {order.get('route', '—')}",
+        f"👥 Мест: {order.get('seats', '—')}",
+        f"📍 Откуда: {order.get('from_place', '—')}",
+        f"🏁 Куда: {order.get('to_place', '—')}",
+        f"📅 Дата: {order.get('trip_date', '—')}",
+        f"💰 Цена: {price_text}",
+    ]
+
+    driver_info = order.get("driver_info")
+    if driver_info:
+        lines.append(f"🚗 Водитель/машина: {driver_info}")
+
+    return "\n".join(lines)
 
 
 def format_my_orders(orders: list) -> str:
@@ -295,6 +519,7 @@ async def set_trip_status(client_id: int, status: str, context: ContextTypes.DEF
     client_messages = {
         "driver_on_way": (
             "🚗 Водитель выехал к вам.\n\n"
+            f"🚘 Машина и водитель:\n{user.get('driver_info') or 'Информация уточняется'}\n\n"
             "Статус поездки можно смотреть в разделе «📋 Мои заказы»."
         ),
         "driver_arrived": (
@@ -1106,9 +1331,98 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # ADMIN START DRIVER SELECTION BEFORE "ON WAY"
+    if data.startswith("st_onway_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("st_onway_", ""))
+        context.user_data["driver_for_trip"] = client_id
+
+        await show_driver_selection(query.message, client_id)
+        return
+
+    # ADMIN CREATE DRIVER CARD
+    if data == "driver_add" or data.startswith("driver_add_for_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = None
+        if data.startswith("driver_add_for_"):
+            client_id = int(data.replace("driver_add_for_", ""))
+
+        context.user_data["create_driver_for"] = client_id
+
+        await query.message.reply_text(
+            "➕ Создание карточки водителя.\n\n"
+            "Напишите данные одним сообщением в 5 строк:\n\n"
+            "1) Имя водителя\n"
+            "2) Телефон\n"
+            "3) Машина\n"
+            "4) Цвет\n"
+            "5) Номер\n\n"
+            "Пример:\n"
+            "Георгий\n"
+            "+995 555 123 456\n"
+            "Toyota Sienna\n"
+            "белая\n"
+            "ABC-123\n\n"
+            "Чтобы отменить, напишите: отмена"
+        )
+        return
+
+    # ADMIN PICK DRIVER FOR TRIP
+    if data.startswith("driver_pick_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        payload = data.replace("driver_pick_", "")
+        client_id_text, driver_id_text = payload.split("_", 1)
+        client_id = int(client_id_text)
+        driver_id = int(driver_id_text)
+
+        driver = fetch_driver(driver_id)
+
+        if not driver:
+            await query.message.reply_text("❌ Водитель не найден.")
+            return
+
+        user = get_user(client_id)
+        assign_driver_to_user(user, driver)
+
+        await set_trip_status(client_id, "driver_on_way", context)
+
+        await query.message.reply_text(
+            "✅ Водитель назначен.\n"
+            "Клиенту отправлен статус «водитель выехал».\n\n"
+            f"{format_driver_card(driver)}",
+            reply_markup=status_admin_keyboard(client_id),
+        )
+        return
+
+    # ADMIN MANUAL DRIVER INPUT FALLBACK
+    if data.startswith("driver_manual_"):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.message.reply_text("❌ Нет доступа")
+            return
+
+        client_id = int(data.replace("driver_manual_", ""))
+        context.user_data["driver_info_for"] = client_id
+
+        await query.message.reply_text(
+            "✍️ Введите данные водителя и машины вручную.\n\n"
+            "Например:\n"
+            "Георгий, +995 555 123 456\n"
+            "Toyota Sienna, белая, ABC-123\n\n"
+            "Чтобы отменить, напишите: отмена"
+        )
+        return
+
     # ADMIN UPDATE TRIP STATUS
     status_callbacks = {
-        "st_onway_": "driver_on_way",
         "st_arrived_": "driver_arrived",
         "st_picked_": "passenger_picked",
         "st_progress_": "in_progress",
@@ -1364,12 +1678,130 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# ADMIN DRIVERS
+# =========================
+
+async def drivers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id not in ADMIN_IDS:
+        return
+
+    drivers = fetch_drivers()
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "➕ Добавить водителя",
+                    callback_data="driver_add",
+                )
+            ]
+        ]
+    )
+
+    if drivers is None:
+        await update.message.reply_text(
+            "❌ База водителей не подключена.\n\n"
+            "Проверьте Supabase-переменные в Render.",
+            reply_markup=keyboard,
+        )
+        return
+
+    if not drivers:
+        await update.message.reply_text(
+            "👨‍✈️ Карточек водителей пока нет.",
+            reply_markup=keyboard,
+        )
+        return
+
+    cards = [format_driver_card(driver) for driver in drivers]
+    await update.message.reply_text(
+        "👨‍✈️ Водители:\n\n" + "\n\n────────────\n\n".join(cards),
+        reply_markup=keyboard,
+    )
+
+
+# =========================
 # ADMIN PRICE
 # =========================
 
 async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id not in ADMIN_IDS:
         return
+
+    if "create_driver_for" in context.user_data:
+        client_id = context.user_data["create_driver_for"]
+        text = update.message.text.strip()
+
+        if text.lower() in ["отмена", "cancel", "❌ отмена"]:
+            context.user_data.pop("create_driver_for", None)
+            await update.message.reply_text("Создание карточки водителя отменено.")
+            raise ApplicationHandlerStop
+
+        driver = create_driver_card(update.message.from_user.id, text)
+
+        if not driver:
+            await update.message.reply_text(
+                "❌ Не удалось создать карточку водителя.\n"
+                "Проверьте таблицу drivers в Supabase и переменные Render."
+            )
+            raise ApplicationHandlerStop
+
+        context.user_data.pop("create_driver_for", None)
+
+        if client_id:
+            await update.message.reply_text(
+                "✅ Карточка водителя создана.\n\n"
+                f"{format_driver_card(driver)}",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ Назначить на этот рейс",
+                                callback_data=f"driver_pick_{client_id}_{driver.get('id')}",
+                            )
+                        ]
+                    ]
+                ),
+            )
+        else:
+            await update.message.reply_text(
+                "✅ Карточка водителя создана.\n\n"
+                f"{format_driver_card(driver)}"
+            )
+
+        raise ApplicationHandlerStop
+
+    if "driver_info_for" in context.user_data:
+        client_id = context.user_data["driver_info_for"]
+        driver_info = update.message.text.strip()
+
+        if driver_info.lower() in ["отмена", "cancel", "❌ отмена"]:
+            context.user_data.pop("driver_info_for", None)
+            await update.message.reply_text("Ввод данных водителя отменён.")
+            raise ApplicationHandlerStop
+
+        if len(driver_info) < 5:
+            await update.message.reply_text(
+                "Напишите данные подробнее. Например:\n"
+                "Георгий, +995 555 123 456\n"
+                "Toyota Sienna, белая, ABC-123"
+            )
+            raise ApplicationHandlerStop
+
+        user = get_user(client_id)
+        user["driver_info"] = driver_info
+
+        await set_trip_status(client_id, "driver_on_way", context)
+
+        context.user_data.pop("driver_info_for", None)
+
+        await update.message.reply_text(
+            "✅ Данные водителя сохранены.\n"
+            "Клиенту отправлен статус: водитель выехал.",
+            reply_markup=status_admin_keyboard(client_id),
+        )
+
+        raise ApplicationHandlerStop
 
     if "reply_to_client" in context.user_data:
         client_id = context.user_data["reply_to_client"]
@@ -1521,6 +1953,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("drivers", drivers_command))
 
     app.add_handler(CallbackQueryHandler(callbacks))
 
@@ -1534,7 +1967,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - MY ORDERS V1 VERSION", flush=True)
+    print("BOT STARTED - DRIVER CARDS VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
