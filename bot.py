@@ -802,7 +802,7 @@ def status_admin_keyboard(client_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("❌ Отменить", callback_data=f"st_cancel_{client_id}"),
             ],
             [
-                InlineKeyboardButton("📡 Live 1ч", callback_data=f"live_{client_id}"),
+                InlineKeyboardButton("📡 Live - трекинг", callback_data=f"live_{client_id}"),
                 InlineKeyboardButton("📍 Геометка", callback_data=f"geo_{client_id}"),
             ],
             [
