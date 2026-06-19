@@ -42,7 +42,7 @@ BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tbilisi")
 BOT_TZ = ZoneInfo(BOT_TIMEZONE)
 
 REMINDER_CHECK_SECONDS = int(os.getenv("REMINDER_CHECK_SECONDS", "300"))
-LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "3600"))
+LIVE_TRACKING_SECONDS = int(os.getenv("LIVE_TRACKING_SECONDS", "28800"))
 
 PAYMENT_BASE_URL = "https://your-payment-link.com/pay?user="
 
@@ -2454,7 +2454,7 @@ async def admin_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def deposit_timer(client_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(3600)  # 1 час, для теста можно поставить 600
+    await asyncio.sleep(600)  # 1 час, для теста можно поставить 600
 
     user = get_user(client_id)
 
