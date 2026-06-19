@@ -31,7 +31,7 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("TOKEN не найден")
 
-ADMIN_IDS = {8308540295}
+ADMIN_IDS = {8308540295, 1688218714}
 ADMIN_CHAT_ID = -1003903294475
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
