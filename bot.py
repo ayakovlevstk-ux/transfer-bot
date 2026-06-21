@@ -77,16 +77,21 @@ EXCHANGE_RATES = {
 }
 
 ROUTE_PRICES_GEL = {
-    "Батуми ↔ Сарпи": 35,
-    "Батуми ↔ Тбилиси": 250,
-    "Батуми ↔ Владикавказ": 350,
+    "Батуми ↔ аэропорт Батуми": 59,
+    "Батуми ↔ Сарпи": 79,
+    "Батуми ↔ Кутаиси": 249,
+    "Батуми ↔ Тбилиси": 399,
+    "Почасовая по Батуми": 59,
+    "Почасовая за городом": 79,
+    "Суточная аренда": 649,
+    "Суточная межгород": 749,
 }
 
 REQUEST_PRICE_ROUTES = {
     "✍️ Свой маршрут",
 }
-DISCOUNT_SEATS_FROM = 4
-DISCOUNT_PERCENT = 5
+
+MAX_SEDAN_PASSENGERS = 3
 
 
 FAQ_ITEMS = {
@@ -1375,32 +1380,41 @@ def format_gel(amount: float) -> str:
 
 
 def calculate_order_price(route: str, seats: int):
-    per_seat = ROUTE_PRICES_GEL.get(route)
+    car_price = ROUTE_PRICES_GEL.get(route)
 
-    if per_seat is None:
+    if car_price is None:
         return {
             "route": route,
             "seats": seats,
-            "per_seat": None,
+            "car_price": None,
             "subtotal": None,
             "discount_percent": 0,
             "discount_amount": 0,
             "total": None,
+            "needs_manager": True,
         }
 
-    subtotal = per_seat * seats
-    discount_percent = DISCOUNT_PERCENT if seats >= DISCOUNT_SEATS_FROM else 0
-    discount_amount = round(subtotal * discount_percent / 100, 2)
-    total = round(subtotal - discount_amount, 2)
+    if seats > MAX_SEDAN_PASSENGERS:
+        return {
+            "route": route,
+            "seats": seats,
+            "car_price": car_price,
+            "subtotal": None,
+            "discount_percent": 0,
+            "discount_amount": 0,
+            "total": None,
+            "needs_manager": True,
+        }
 
     return {
         "route": route,
         "seats": seats,
-        "per_seat": per_seat,
-        "subtotal": subtotal,
-        "discount_percent": discount_percent,
-        "discount_amount": discount_amount,
-        "total": total,
+        "car_price": car_price,
+        "subtotal": car_price,
+        "discount_percent": 0,
+        "discount_amount": 0,
+        "total": car_price,
+        "needs_manager": False,
     }
 
 
@@ -1596,7 +1610,7 @@ def render_payment_html(order_id: str) -> str:
       <p>🛣 Маршрут: <strong>{safe_html(order.get("route") or "не указан")}</strong></p>
       <p>👥 Мест: <strong>{safe_html(order.get("seats") or "—")}</strong></p>
       <p>📅 Дата: <strong>{safe_html(order.get("trip_date") or "—")}</strong></p>
-      <p>После оплаты вернитесь в Telegram и нажмите «💳 Я оплатил». Менеджер проверит оплату и закрепит место.</p>
+      <p>После оплаты вернитесь в Telegram и нажмите «💳 Я оплатил». Менеджер проверит оплату и закрепит автомобиль и время водителя.</p>
       {bot_button}
 
       <div class="summary">
@@ -1646,22 +1660,28 @@ def render_payment_html(order_id: str) -> str:
 
 
 def price_summary(price_data: dict) -> str:
-    if not price_data or price_data.get("total") is None:
+    if not price_data:
+        return "💰 Цена: по запросу"
+
+    seats = price_data.get("seats")
+
+    if price_data.get("total") is None:
+        if seats and int(seats) > MAX_SEDAN_PASSENGERS:
+            return (
+                "💰 Цена: по запросу\n"
+                f"👥 Пассажиров: {seats}\n"
+                "🚐 Для 4+ пассажиров нужен минивен. Менеджер рассчитает стоимость вручную."
+            )
+
         return "💰 Цена: по запросу"
 
     lines = [
-        f"💰 Цена за 1 место: {format_gel(price_data['per_seat'])}",
-        f"👥 Мест: {price_data['seats']}",
-        f"🧾 Сумма: {format_gel(price_data['subtotal'])}",
+        f"💰 Цена за машину: {format_gel(price_data['car_price'])}",
+        f"👥 Пассажиров: {price_data['seats']}",
+        "🚘 Lexus ES300h, до 3 пассажиров",
+        "🧳 Включены 1–2 стандартных чемодана",
+        f"✅ Итого: {format_gel(price_data['total'])}",
     ]
-
-    if price_data.get("discount_percent"):
-        lines.append(
-            f"🎁 Скидка {price_data['discount_percent']}%: "
-            f"-{format_gel(price_data['discount_amount'])}"
-        )
-
-    lines.append(f"✅ Итого: {format_gel(price_data['total'])}")
 
     return "\n".join(lines)
 
@@ -1689,11 +1709,11 @@ async def send_price_to_client(client_id: int, context: ContextTypes.DEFAULT_TYP
     await context.bot.send_message(
         chat_id=client_id,
         text=(
-            "💳 БРОНИРОВАНИЕ МЕСТА\n\n"
+            "💳 БРОНИРОВАНИЕ ТРАНСФЕРА\n\n"
             f"💰 Общая цена:\n{format_multicurrency(price)}\n\n"
             f"💵 Предоплата 50%:\n{format_multicurrency(deposit)}\n\n"
             f"🔗 Оплатить: {payment_link}\n\n"
-            "⚠️ После оплаты место будет закреплено.\n"
+            "⚠️ После оплаты автомобиль и время водителя будут закреплены за вами.\n"
             "Правила возврата предоплаты и опозданий доступны в разделе «❓ Помощь»."
         ),
         reply_markup=PAYMENT_KB,
@@ -1741,9 +1761,12 @@ COMMENT_KB = ReplyKeyboardMarkup(
 
 ROUTE_KB = ReplyKeyboardMarkup(
     [
-        ["Батуми ↔ Владикавказ"],
-        ["Батуми ↔ Тбилиси"],
+        ["Батуми ↔ аэропорт Батуми"],
         ["Батуми ↔ Сарпи"],
+        ["Батуми ↔ Кутаиси"],
+        ["Батуми ↔ Тбилиси"],
+        ["Почасовая по Батуми", "Почасовая за городом"],
+        ["Суточная аренда", "Суточная межгород"],
         ["✍️ Свой маршрут"],
         ["⬅️ Назад"],
     ],
@@ -1800,12 +1823,44 @@ def get_user(user_id: int):
 # START
 # =========================
 
+START_TEXT = (
+    "Здравствуйте! Это бот для заказа частного трансфера из Батуми.\n\n"
+    "🚘 Автомобиль: Lexus ES300h\n"
+    "👥 До 3 пассажиров\n"
+    "🧳 Включены 1–2 стандартных чемодана\n"
+    "💳 Оплата по ссылке после подтверждения заявки\n"
+    "📍 По возможности доступен live-трекинг машины\n"
+    "💬 Менеджер сопровождает заказ в Telegram\n\n"
+    "Основные направления:\n"
+    "• Батуми → аэропорт Батуми\n"
+    "• Батуми → Сарпи\n"
+    "• Батуми → Кутаиси\n"
+    "• Батуми → Тбилиси\n"
+    "• Почасовая аренда\n"
+    "• Суточная аренда\n"
+    "• Индивидуальный маршрут\n\n"
+    "Как оформить заказ:\n"
+    "1. Нажмите «🚕 Заказать трансфер»\n"
+    "2. Выберите маршрут\n"
+    "3. Укажите дату, время, точку подачи и комментарий\n"
+    "4. Менеджер подтвердит цену и возможность поездки\n"
+    "5. После оплаты бронь закрепляется\n\n"
+    "Важные правила:\n"
+    "• Цена указана за машину, а не за место\n"
+    "• Если пассажиров больше 3, нужен минивен, стоимость рассчитывается отдельно\n"
+    "• Ночная подача, ожидание, дополнительные остановки и большой багаж могут влиять на цену\n"
+    "• Поездки к границе зависят от очередей, погоды и работы КПП\n"
+    "• Предоплата подтверждает бронь автомобиля и времени водителя\n\n"
+    "Выберите действие в меню ниже."
+)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(update.message.from_user.id)
     user["step"] = None
 
     await update.message.reply_text(
-        "Привет! 🚕 Выбери действие:",
+        START_TEXT,
         reply_markup=MENU,
     )
 
@@ -1837,33 +1892,33 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["price_data"] = None
         user["total_price_gel"] = None
 
-        await update.message.reply_text("Сколько мест необходимо?")
+        await update.message.reply_text("Сколько пассажиров?\n\nLexus ES300h рассчитан до 3 пассажиров. Если пассажиров больше 3, менеджер рассчитает минивен вручную.")
         return
 
     if text == "💰 Цены":
         await update.message.reply_text(
-            "💰 Цены за машину:\n\n"
-            "Батуми ↔ аэропорт Батуми от 59 GEL\n"
-            "Батуми ↔ Тбилиси — от 399 GEL\n"
-            "Батуми ↔ Кутаиси — от 249 GEL\n\n"
-            "Батуми ↔ Сарпи — от 79 GEL\n\n"
-            "Почасовая по Батуми от 59 GEL\n\n"
-            "Почасовая за городом — от 79 GEL\n\n"
-            "Аренда водителя на сутки — от 649 GEL\n\n"
-            "Суточная межгород — от 749 GEL\n\n"
-            
-
-            ```
-        "🚘 Тарифы указаны за машину Lexus ES300, до 3 пассажиров.\n"
-        "Это частный премиум-трансфер, не сборная поездка по местам.\n"
-        "В стоимость включены 1–2 стандартных чемодана.\n"
-        "Обратное направление считается по тому же тарифу.\n"
-        "Если пассажиров больше 3, нужен минивен — выберите «✍️ Свой маршрут» при заказе, менеджер рассчитает стоимость.\n"
-        "Если нужного направления нет в списке, выберите «✍️ Свой маршрут» при заказе.\n"
-        "Финальная цена зависит от даты, времени подачи, багажа, ожидания, дополнительных остановок и пограничных условий.\n\n"
-        "Правила по предоплате, опозданиям, границе и багажу доступны в разделе «❓ Помощь»."
-```
-
+            "💰 Тарифы Lexus ES300h\n\n"
+            "Цена указана за машину, до 3 пассажиров.\n"
+            "USD указан ориентировочно, финальный расчёт — в GEL.\n\n"
+            "🚘 Основные направления:\n"
+            "• Батуми ↔ аэропорт Батуми — от 59 GEL / ≈ 22 USD\n"
+            "• Батуми ↔ Сарпи — от 79 GEL / ≈ 30 USD\n"
+            "• Батуми ↔ Кутаиси — от 249 GEL / ≈ 94 USD\n"
+            "• Батуми ↔ Тбилиси — от 399 GEL / ≈ 151 USD\n\n"
+            "⏱ Аренда:\n"
+            "• Почасовая по Батуми — от 59 GEL / ≈ 22 USD в час\n"
+            "• Почасовая за городом — от 79 GEL / ≈ 30 USD в час\n"
+            "• Суточная аренда — от 649 GEL / ≈ 245 USD\n"
+            "• Суточная межгород — от 749 GEL / ≈ 283 USD\n\n"
+            "🚘 Тарифы указаны за машину Lexus ES300h, до 3 пассажиров.\n"
+            "Это частный премиум-трансфер, не сборная поездка по местам.\n"
+            "В стоимость включены 1–2 стандартных чемодана.\n"
+            "Обратное направление считается по тому же тарифу.\n"
+            "Если пассажиров больше 3, нужен минивен — выберите «✍️ Свой маршрут» при заказе, менеджер рассчитает стоимость.\n"
+            "Если нужного направления нет в списке, выберите «✍️ Свой маршрут» при заказе.\n"
+            "Финальная цена зависит от даты, времени подачи, багажа, ожидания, дополнительных остановок и пограничных условий.\n\n"
+            "Правила по предоплате, опозданиям, границе и багажу доступны в разделе «❓ Помощь».",
+            reply_markup=MENU,
         )
         return
 
@@ -2125,8 +2180,9 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if seats < 1 or seats > 7:
             await update.message.reply_text(
-                "Для Toyota Sienna можно указать от 1 до 7 мест.\n"
-                "Введите корректное количество."
+                "Можно указать от 1 до 7 пассажиров.\n"
+                "До 3 пассажиров — Lexus ES300h.\n"
+                "Для 4+ пассажиров менеджер рассчитает минивен вручную."
             )
             return
 
@@ -3436,7 +3492,7 @@ def main():
         group=1,
     )
 
-    print("BOT STARTED - PAYMENT PAGE V7 VERSION", flush=True)
+    print("BOT STARTED - ES300H START RULES VERSION", flush=True)
 
     app.run_polling(drop_pending_updates=True)
 
